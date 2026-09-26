@@ -22,6 +22,24 @@ Conditional module:
   into a whitelisted ERC-4626 sink (Morpho vaults on Base) and unwinds when the spread disappears. Self-custody
   wallets may list it as a WETH market, so the same keeper routes their ETH into carry only when it pays.
 
+1inch SwapVM (`src/swapvm/`):
+
+- **Same shares, second app.** A self-custody wallet also ships 1inch **SwapVM** orders over the same ERC-4626
+  shares, through the same Aqua, next to its `AquaYieldApp` strategy. `YieldSwapVMRouter` is the unmodified SwapVM
+  1.2 core (submodule `lib/swap-vm`) with 1inch's full Aqua instruction set plus two YieldSolver instructions:
+  - `YieldOracleSwap` (opcode 64): Chainlink ± spread market making on **yield-bearing shares**. It converts the
+    share registers to underlying assets, skews toward the maker's target ratio (skew ≤ spread, so the maker never
+    trades worse than the oracle), and enforces a max trade size and a ±band. It then converts back to shares, and
+    rounding always favours the maker.
+  - `SequencerGuard` (opcode 65): no trades while the Base sequencer is down or inside the grace period (Chainlink
+    L2 uptime feed).
+
+  A program is `[SequencerGuard] [Salt] YieldOracleSwap`, built by `YieldSwapVMStrategies`. Any SwapVM taker can fill
+  it. `SwapVMResolver` fills 1inch Fusion intents: it buys the wallet's shares, redeems them in SwapVM's
+  pre-transfer-in callback, fills the order, and pays the wallet in freshly minted shares of the other asset.
+  `test/SwapVM.t.sol` runs 1inch's own `CoreInvariants` suite on the program: symmetry, quote/swap consistency,
+  monotonicity, additivity, maker-favouring rounding and balance sufficiency.
+
 | Contract | Role |
 |---|---|
 | `AquaYieldApp` | Self-custody: Aqua app whose maker is a user wallet holding ERC-4626 shares. `rebalance` (keeper; listed markets of the same asset; value-preserving), `flash` (JIT with fee to the maker), `swapExactOut` (oracle ± spread with skew, band and size limits on the committed budgets). Every payment is deposited and pushed back to the wallet as shares. |
@@ -33,6 +51,9 @@ Conditional module:
 | `OracleSwapApp` | B: Aqua app. `ask = oracle·(1 + spread − skew)`, `bid = oracle·(1 − spread − skew)`, skew ∝ distance from target (≤ spread, so never worse than oracle). Rejects stale prices, oversized trades and trades that leave the band. |
 | `YieldResolver` | Taker for both. `execute` borrows JIT liquidity (A); `executeSwap` buys from inventory (B). Runs calls against whitelisted targets (LOP / Fusion settlement, routers), pays the vault and keeps the profit. Loss-making runs revert. |
 | `CarryVault` | Carry: WETH collateral on an Aave V3 pool; keeper `open` (borrow → sink, LTV ≤ `maxLtvBps`, sink cap), `close`, `rotate`, `deleverage` (keeper any time, **anyone** above `deleverageLtvBps`), `harvest` (stable profit → WETH via whitelisted router, checked against Aave's oracle), `repayFromCollateral` (negative-carry shortfall). `totalAssets = collateral + stable held − debt`; withdrawals repay debt pro-rata first. Owner can only whitelist sinks/routers and tighten risk; no path moves funds to an arbitrary address. |
+| `swapvm/YieldSwapVMRouter` | 1inch SwapVM 1.2 + `AquaOpcodes` + `YieldOracleSwap` (64) / `SequencerGuard` (65), wired to the deployment's Aqua. Size-optimised (via-IR, 1 run) to fit under 24 KiB. |
+| `swapvm/YieldSwapVMStrategies` | Canonical order builder: `buildOrder`, `strategy` (Aqua strategy bytes + hash = SwapVM order hash), `program`. |
+| `swapvm/SwapVMResolver` | Fusion taker for SwapVM orders: exact-out swap → redeem → whitelisted fill calls → mint input shares → SwapVM pushes them to the maker via Aqua. Operator-only; loss-making runs revert. |
 | `adapters/ERC4626Adapter` | Morpho (MetaMorpho) vaults and Fluid fTokens. |
 | `adapters/AaveV3Adapter` | Aave V3 pool + aToken. |
 | `external/FusionContracts.sol` | Pulls the official 1inch LimitOrderProtocol v4 and Fusion `SimpleSettlement` (unmodified submodules, compiled like upstream with via-IR) so they can be deployed where 1inch has none. |
