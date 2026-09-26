@@ -251,8 +251,28 @@ export async function seedSwapVM(ctx: Context) {
     const volAssets = await valueIn(listed, lp.address)
     if (stableAssets === 0n && volAssets === 0n) continue
 
+    // Orders are immutable bytecode: when the configured quote changes (e.g. a tighter spread), dock the stale
+    // orders and ship new programs — no contract changes, the shares never move.
+    const w = ctx.walletFor(lp.key)
+    const stale = registry
+      .active()
+      .filter((o) => o.maker === lp.address && o.params)
+      .filter(
+        (o) =>
+          o.params!.spreadBps !== cfg.swapvm.spreadBps ||
+          o.params!.skewBps !== cfg.swapvm.skewBps ||
+          o.params!.maxTradeBps !== cfg.swapvm.maxTradeBps ||
+          o.params!.bandBps !== cfg.swapvm.bandBps ||
+          o.params!.maxPriceAge !== cfg.swapvm.maxPriceAge,
+      )
+    for (const o of stale) {
+      await write(ctx, w, { address: d.aqua, abi: aquaAbi, functionName: 'dock', args: [d.swapVMRouter!, o.hash, [o.tokenA, o.tokenB]] })
+      log.info('docked stale SwapVM order', { lp: lp.address, hash: o.hash.slice(0, 10), spreadBps: o.params!.spreadBps })
+    }
+    const fresh = registry.active().filter((o) => !stale.includes(o))
+
     for (const [stableShare, volShare] of stables.flatMap((st) => listed.map((v) => [st, v] as const))) {
-      if (registry.active().some((o) => o.maker === lp.address && o.params?.stableShare === stableShare && o.params?.volatileShare === volShare)) continue
+      if (fresh.some((o) => o.maker === lp.address && o.params?.stableShare === stableShare && o.params?.volatileShare === volShare)) continue
       if ((await client.getBalance({ address: lp.address })) < parseEther('0.0005')) {
         const hash = await funder.sendTransaction({ to: lp.address, value: parseEther(process.env.MAKER_GAS_ETH ?? '0.002') })
         await client.waitForTransactionReceipt({ hash })
@@ -277,7 +297,6 @@ export async function seedSwapVM(ctx: Context) {
         client.readContract({ address: stableShare, abi: erc4626Lite, functionName: 'convertToShares', args: [stableAssets] }),
         client.readContract({ address: volShare, abi: erc4626Lite, functionName: 'convertToShares', args: [volAssets] }),
       ])
-      const w = ctx.walletFor(lp.key)
       for (const token of [stableShare, volShare]) {
         const allowance = await client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [lp.address, d.aqua] })
         if (allowance < maxUint256 / 2n) await write(ctx, w, { address: token, abi: erc20Abi, functionName: 'approve', args: [d.aqua, maxUint256] })

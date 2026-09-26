@@ -164,7 +164,7 @@ export function loadConfig() {
     },
     /** SwapVM orders the seed ships for wallet LPs (YieldOracleSwap instruction parameters). */
     swapvm: {
-      spreadBps: num('SWAPVM_SPREAD_BPS', 15),
+      spreadBps: num('SWAPVM_SPREAD_BPS', 12),
       skewBps: num('SWAPVM_SKEW_BPS', 10),
       maxTradeBps: num('SWAPVM_MAX_TRADE_BPS', 2_000),
       bandBps: num('SWAPVM_BAND_BPS', 500),
