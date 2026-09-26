@@ -1,6 +1,7 @@
 import { addrUrl } from '../chain.ts';
 import { MARKET_NAMES } from '../config.ts';
 import { $, esc, pct, short, units, usd } from '../format.ts';
+import { icon, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 
 interface Row {
@@ -14,13 +15,12 @@ interface Row {
 
 export function mountAllocation(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Markets</h2>
-        <p class="muted">Capital is spread across lending markets by the keeper; a liquid reserve funds just-in-time loans to the resolver.</p>
-      </div>
-      <a class="head-link num" data-vault target="_blank" rel="noopener"></a>
-    </header>
+    ${sectionHead({
+      icon: 'pie',
+      title: 'Markets',
+      desc: 'Capital is spread across lending markets by the keeper; a liquid reserve funds just-in-time loans to the resolver.',
+      aside: '<a class="head-link ext" data-vault target="_blank" rel="noopener"></a>',
+    })}
     <div class="bar" role="img" aria-label="Allocation by market"></div>
     <div class="alloc-list" role="table" aria-label="Allocation by market">
       <div class="alloc-row alloc-headrow" role="row">
@@ -40,7 +40,7 @@ export function mountAllocation(root: HTMLElement): void {
     if (!snapshot) return;
     const a = snapshot.strategyA;
     vaultLink.href = addrUrl(a.vault);
-    vaultLink.textContent = `YieldVault ${short(a.vault)} ↗`;
+    vaultLink.innerHTML = `YieldVault <span class="mono">${short(a.vault)}</span>${icon('external')}`;
 
     const rows: Row[] = [
       ...[...a.markets]
@@ -48,7 +48,7 @@ export function mountAllocation(root: HTMLElement): void {
         .map((m) => ({
           id: m.name in MARKET_NAMES ? m.name : 'reserve',
           name: MARKET_NAMES[m.name] ?? m.name,
-          note: `Adapter ${short(m.adapter)}`,
+          note: `Adapter <span class="mono">${short(m.adapter)}</span>`,
           href: addrUrl(m.adapter),
           amount: units(m.assets, 6),
           apy: m.apy,
@@ -66,7 +66,7 @@ export function mountAllocation(root: HTMLElement): void {
     body.innerHTML = rows
       .map((r) => {
         const apy = r.apy === 'reserve' ? '<span class="muted">—</span>' : r.apy === null ? '<span class="muted measuring">measuring…</span>' : pct(r.apy);
-        const note = r.href ? `<a class="muted" href="${r.href}" target="_blank" rel="noopener">${r.note}</a>` : `<small class="muted">${r.note}</small>`;
+        const note = r.href ? `<a class="muted ext" href="${r.href}" target="_blank" rel="noopener">${r.note}${icon('external')}</a>` : `<small class="muted">${r.note}</small>`;
         return `
       <div class="alloc-row" role="row">
         <span role="cell" class="alloc-name">

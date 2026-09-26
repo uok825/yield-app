@@ -1,6 +1,7 @@
 import { connect, switchNetwork } from '../chain.ts';
 import { CHAIN_ID } from '../config.ts';
 import { $, short } from '../format.ts';
+import { icon } from '../icons.ts';
 import { store } from '../store.ts';
 
 export function mountTopbar(root: HTMLElement): void {
@@ -13,8 +14,9 @@ export function mountTopbar(root: HTMLElement): void {
         </svg>
         <span>YieldSolver</span>
       </a>
+      <span class="topbar-sep" aria-hidden="true"></span>
       <span class="pill live-pill" data-live><span class="dot"></span><span data-live-text>Base Sepolia</span></span>
-      <span class="block-label num muted" data-block></span>
+      <span class="block-label muted" data-block hidden>${icon('block')}<span class="num" data-block-n></span></span>
       <button class="btn btn-secondary wallet-btn" type="button"></button>
     </div>`;
 
@@ -37,11 +39,12 @@ export function mountTopbar(root: HTMLElement): void {
     const live = !!snapshot && !snapshotError;
     pill.classList.toggle('is-live', live);
     pill.classList.toggle('is-down', !!snapshotError);
-    $(pill, '[data-live-text]').textContent = snapshotError ? 'Base Sepolia · reconnecting' : 'Base Sepolia · live';
+    $(pill, '[data-live-text]').textContent = snapshotError ? 'Reconnecting' : live ? 'Base Sepolia' : 'Connecting';
     pill.title = snapshotError ?? 'Reading live contract state from Base Sepolia (chain 84532).';
     if (snapshot && snapshot.block !== lastBlock) {
       lastBlock = snapshot.block;
-      blockEl.textContent = `#${snapshot.block.toLocaleString('en-US')}`;
+      blockEl.hidden = false;
+      $(blockEl, '[data-block-n]').textContent = snapshot.block.toLocaleString('en-US');
       blockEl.title = 'Latest block seen by the relayer';
       pill.classList.remove('pulse');
       void pill.offsetWidth; // restart the pulse animation
@@ -49,13 +52,16 @@ export function mountTopbar(root: HTMLElement): void {
     }
 
     const wrongChain = wallet.status === 'connected' && wallet.chainId !== CHAIN_ID;
-    btn.className = `btn wallet-btn ${wrongChain ? 'btn-warn' : 'btn-secondary'}${wallet.status === 'connected' && !wrongChain ? ' is-connected' : ''}`;
+    const connected = wallet.status === 'connected' && !wrongChain;
+    btn.className = `btn wallet-btn ${wrongChain ? 'btn-warn' : 'btn-secondary'}${connected ? ' is-connected' : ''}`;
     btn.disabled = wallet.status === 'connecting';
-    btn.textContent =
+    const label =
       wallet.status === 'none' ? 'No wallet'
       : wallet.status === 'connecting' ? 'Connecting…'
       : wallet.status === 'disconnected' ? 'Connect wallet'
-      : wrongChain ? 'Switch to Base Sepolia'
+      : wrongChain ? 'Switch network'
       : short(wallet.address!);
+    btn.innerHTML = `${icon(wrongChain ? 'alert' : 'wallet')}<span class="${connected ? 'mono' : ''}">${label}</span>`;
+    btn.title = wallet.status === 'none' ? 'No browser wallet detected' : wrongChain ? 'Switch to Base Sepolia' : '';
   });
 }

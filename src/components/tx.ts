@@ -1,7 +1,8 @@
 import { type TxStep, explain, txUrl } from '../chain.ts';
 import { esc } from '../format.ts';
+import { ext, icon } from '../icons.ts';
 
-const link = (hash: string, text = 'View tx') => `<a href="${txUrl(hash)}" target="_blank" rel="noopener">${text} ↗</a>`;
+const link = (hash: string, text = 'View tx') => ext(txUrl(hash), text);
 
 /** Drives a one-line transaction status (`<p class="tx-msg">`): progress, success with a basescan link, or a readable error. */
 export function txStatus(el: HTMLElement, idle = '') {
@@ -22,11 +23,11 @@ export function txStatus(el: HTMLElement, idle = '') {
     },
     done(text: string, hash?: string): void {
       api.busy = false;
-      set('is-done', `<span>✓ ${esc(text)}${hash ? ` · ${link(hash)}` : ''}</span>`);
+      set('is-done', `${icon('check')}<span>${esc(text)}${hash ? ` · ${link(hash)}` : ''}</span>`);
     },
     fail(e: unknown): void {
       api.busy = false;
-      set('is-error', `<span>${esc(explain(e))}</span>`);
+      set('is-error', `${icon('alert')}<span>${esc(explain(e))}</span>`);
     },
   };
   api.idle();

@@ -3,6 +3,7 @@ import { type OrderRecord, type QuoteResponse, getOrder, postOrder, postQuote } 
 import { account, ensureAllowance, received, refreshBalances, txUrl, walletClient } from '../chain.ts';
 import { POLL } from '../config.ts';
 import { $, ago, num, parseAmount, short, type Token, TOKEN_DEC, TOKEN_DP, toInput, tok, units, usd } from '../format.ts';
+import { ext, icon, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 import { pairOf, routeLabel, symbolOf } from './fills.ts';
 import { txStatus } from './tx.ts';
@@ -23,9 +24,7 @@ const statusPill = (o: OrderRecord) =>
 /** The headline demo: quote → approve → sign a 1inch Fusion order → watch the resolver fill it. */
 export function mountIntent(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head card-head-row">
-      <div><h2>Fusion intent</h2><p class="muted">Sign a gasless 1inch Fusion order. YieldSolver’s resolver fills it from strategy liquidity.</p></div>
-    </header>
+    ${sectionHead({ icon: 'swap', title: 'Fusion intent', desc: 'Sign a gasless 1inch Fusion order. YieldSolver’s resolver fills it from strategy liquidity.' })}
     <div data-form>
       <div class="tabs" role="radiogroup" aria-label="Direction">
         <button type="button" role="radio" data-dir="USDC">USDC → WETH</button>
@@ -50,7 +49,7 @@ export function mountIntent(root: HTMLElement): void {
       <button type="button" class="btn btn-secondary btn-block" data-new>New intent</button>
     </div>
     <div class="mine">
-      <h3>Your intents</h3>
+      <h3>${icon('history')}<span>Your intents</span></h3>
       <ul class="mine-list" data-mine></ul>
     </div>`;
 
@@ -125,11 +124,11 @@ export function mountIntent(root: HTMLElement): void {
           .slice(0, 5)
           .map((o) => {
             const route = o.status === 'filled' ? routeLabel(o.report?.route) : '';
-            const tx = o.fillTx ? ` · <a href="${txUrl(o.fillTx)}" target="_blank" rel="noopener">tx ↗</a>` : '';
+            const tx = o.fillTx ? ` · ${ext(txUrl(o.fillTx), 'Tx')}` : '';
             return `<li><span><b>${pairOf(o, snapshot)}</b><small class="muted">${tok(o.makingAmount, symbolOf(o.makerAsset, snapshot))} · ${ago(now - o.createdAt)}${route ? ` · ${route}` : ''}${tx}</small></span>${statusPill(o)}</li>`;
           })
           .join('')
-      : '<li class="muted empty-sm">No intents yet.</li>';
+      : '<li class="muted empty-sm">No intents yet. Signed orders show up here.</li>';
   }
 
   /* ── Tracking ─────────────────────────── */
@@ -168,8 +167,8 @@ export function mountIntent(root: HTMLElement): void {
     } else if (o.status === 'filled') {
       clock.textContent = ago(Date.now() - o.updatedAt);
       const via = o.report ? routeLabel(o.report.route) : '';
-      const tx = o.fillTx ? ` <a href="${txUrl(o.fillTx)}" target="_blank" rel="noopener">View fill ↗</a>` : '';
-      result.innerHTML = `✓ Filled by YieldSolver${via ? ` via ${via}` : ''}.${tx}`;
+      const tx = o.fillTx ? ` ${ext(txUrl(o.fillTx), 'View fill')}` : '';
+      result.innerHTML = `${icon('check')}<span>Filled by YieldSolver${via ? ` via ${via}` : ''}.${tx}</span>`;
       result.className = 'track-result is-done';
     } else {
       clock.textContent = '';
@@ -186,7 +185,7 @@ export function mountIntent(root: HTMLElement): void {
             ? '<span class="muted">reading…</span>'
             : `${start !== null ? `${tok(start, recv, false)} → ` : '≥ '}${tok(o.minTakingAmount, recv)}`
       }</dd></div>
-      <div><dt>Order</dt><dd class="num muted">${short(o.orderHash)}</dd></div>`;
+      <div><dt>Order</dt><dd class="mono muted">${short(o.orderHash)}</dd></div>`;
   }
 
   async function poll(): Promise<void> {

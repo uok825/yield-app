@@ -1,6 +1,7 @@
 import { carryVaultAbi } from '../../bots/src/abis.ts';
 import { account, ensureAllowance, publicClient, refreshBalances, write } from '../chain.ts';
 import { $, parseAmount, toInput, tok, units, usd } from '../format.ts';
+import { sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 import { txStatus } from './tx.ts';
 
@@ -9,7 +10,7 @@ type Mode = 'deposit' | 'withdraw';
 /** Carry · ERC-4626 over WETH: approve + deposit, and withdraw up to the contract's maxWithdraw (Max redeems maxRedeem). */
 export function mountCarryDeposit(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head card-head-row"><h2>Carry vault</h2><span class="muted small">ERC-4626 · ycWETH</span></header>
+    ${sectionHead({ icon: 'vault', title: 'Carry vault', aside: '<span class="head-meta">ERC-4626 · ycWETH</span>' })}
     <div class="tabs" role="tablist">
       <button type="button" role="tab" data-mode="deposit">Deposit</button>
       <button type="button" role="tab" data-mode="withdraw">Withdraw</button>

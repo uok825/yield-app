@@ -2,6 +2,7 @@ import { type OrderRecord, type Route, type Snapshot, parseRoute } from '../api.
 import { addrUrl, txUrl, usdValue } from '../chain.ts';
 import { PROFILE_NAMES } from '../config.ts';
 import { $, ago, short, type Token, tok, usd } from '../format.ts';
+import { emptyState, ext, icon, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 
 const MAX_ROWS = 10;
@@ -27,8 +28,8 @@ function walletMaker(r: Extract<Route, { kind: 'wallet' }>, snap: Snapshot): str
 function walletSource(r: Extract<Route, { kind: 'wallet' }>, snap: Snapshot): string {
   const maker = walletMaker(r, snap);
   const who = maker
-    ? `<a class="num" href="${addrUrl(maker)}" target="_blank" rel="noopener">${short(maker)}</a>`
-    : `<span class="num">${r.makerPrefix}…</span>`;
+    ? ext(addrUrl(maker), short(maker), 'mono')
+    : `<span class="mono">${r.makerPrefix}…</span>`;
   return `${r.mode === 'mm' ? 'Market-made' : 'JIT loan'} · ${who}`;
 }
 
@@ -42,7 +43,7 @@ function row(o: OrderRecord, snap: Snapshot, now: number, source: string): strin
       <span class="fill-amount r num">${tok(o.makingAmount, symbolOf(o.makerAsset, snap))}</span>
       <span class="fill-src">${source}</span>
       <span class="fill-fee r num pos" title="${profitTitle}">+${usd(profit)}</span>
-      <span class="fill-status r">${hash ? `<a class="tx-link" href="${txUrl(hash)}" target="_blank" rel="noopener" aria-label="View fill transaction">Tx ↗</a>` : ''}</span>
+      <span class="fill-status r">${hash ? `<a class="tx-link" href="${txUrl(hash)}" target="_blank" rel="noopener" aria-label="View fill transaction" title="View on Basescan">Tx${icon('external')}</a>` : ''}</span>
     </li>`;
 }
 
@@ -63,12 +64,7 @@ const EMPTY: Record<Route['kind'], string> = {
 export function mountFills(root: HTMLElement, kind: Route['kind']): void {
   const copy = COPY[kind];
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Recent fills</h2>
-        <p class="muted">${copy}</p>
-      </div>
-    </header>
+    ${sectionHead({ icon: 'history', title: 'Recent fills', desc: copy })}
     <div class="fills-head">
       <span>Intent</span><span class="r">Sold</span><span>${kind === 'jit' ? 'Liquidity' : kind === 'wallet' ? 'Wallet' : 'Profile'}</span><span class="r"${
         kind === 'wallet' ? ' title="The resolver’s margin on the fill. The wallet’s own spread or JIT fee is under Earned in the strategies table."' : ''
@@ -97,6 +93,6 @@ export function mountFills(root: HTMLElement, kind: Route['kind']): void {
             return row(o, snapshot, now, source);
           })
           .join('')
-      : `<li class="empty muted">${EMPTY[kind]}</li>`;
+      : emptyState(EMPTY[kind], 'inbox', 'li');
   });
 }

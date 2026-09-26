@@ -1,4 +1,5 @@
 import { $, ago, apyPct, esc, num, pct, units, usd } from '../format.ts';
+import { type IconName, icon } from '../icons.ts';
 import { store } from '../store.ts';
 import { carryBest, signedPp, spreadClass } from './carry.ts';
 import { MEASURING, apyBasis, extrapolatedTitle, isExtrapolated, signedHtml, sparkline } from './yield.ts';
@@ -6,6 +7,7 @@ import { MEASURING, apyBasis, extrapolatedTitle, isExtrapolated, signedHtml, spa
 interface TileDef {
   key: string;
   label: string;
+  icon: IconName;
   /** Tooltip on the label explaining what the number means. */
   hint?: string;
 }
@@ -28,7 +30,7 @@ function tiles(root: HTMLElement, defs: TileDef[]) {
     .map(
       (t) => `
     <div class="stat" data-t="${t.key}">
-      <div class="stat-label"${t.hint ? ` title="${esc(t.hint)}"` : ''}>${t.label}</div>
+      <div class="stat-label"${t.hint ? ` title="${esc(t.hint)}"` : ''}>${icon(t.icon)}<span>${t.label}</span></div>
       <div class="stat-main"><div class="stat-value num" data-v></div><div class="stat-aside" data-x></div></div>
       <div class="stat-sub" data-s></div>
       <div class="stat-note" data-n hidden></div>
@@ -75,10 +77,10 @@ function netApyTile(
 
 export function mountStats(root: HTMLElement): void {
   const set = tiles(root, [
-    { key: 'tvl', label: 'Total value locked' },
-    { key: 'earned', label: 'Earned since launch', hint: 'JIT flash-loan fees paid to the vault by the resolver. Measured, not annualised.' },
-    { key: 'price', label: 'Share price', hint: 'USDC per ysUSDC. Rises as lending interest and JIT fees accrue.' },
-    { key: 'apy', label: 'Net APY' },
+    { key: 'tvl', label: 'Total value locked', icon: 'vault' },
+    { key: 'earned', label: 'Earned since launch', icon: 'coins', hint: 'JIT flash-loan fees paid to the vault by the resolver. Measured, not annualised.' },
+    { key: 'price', label: 'Share price', icon: 'earn', hint: 'USDC per ysUSDC. Rises as lending interest and JIT fees accrue.' },
+    { key: 'apy', label: 'Net APY', icon: 'percent' },
   ]);
   store.subscribe(({ snapshot }) => {
     if (!snapshot) return;
@@ -113,14 +115,15 @@ export function mountStats(root: HTMLElement): void {
 
 export function mountMmStats(root: HTMLElement): void {
   const set = tiles(root, [
-    { key: 'tvl', label: 'Total value locked' },
-    { key: 'earned', label: 'Earned since launch', hint: 'Spread captured on swaps filled from inventory, all profiles. Measured, not annualised.' },
+    { key: 'tvl', label: 'Total value locked', icon: 'vault' },
+    { key: 'earned', label: 'Earned since launch', icon: 'coins', hint: 'Spread captured on swaps filled from inventory, all profiles. Measured, not annualised.' },
     {
       key: 'hodl',
       label: 'vs HODL',
+      icon: 'scale',
       hint: 'Share value vs simply holding the USDC/WETH basket each share started with, at today’s ETH price. Isolates market-making skill from ETH price moves. Value-weighted over profiles.',
     },
-    { key: 'apy', label: 'Net APY' },
+    { key: 'apy', label: 'Net APY', icon: 'percent' },
   ]);
   store.subscribe(({ snapshot }) => {
     if (!snapshot) return;
@@ -154,10 +157,10 @@ export function mountMmStats(root: HTMLElement): void {
 /** Self-custody overview: value held in wallets, what wallets earned, keeper moves and the best live lending APY. */
 export function mountScStats(root: HTMLElement): void {
   const set = tiles(root, [
-    { key: 'value', label: 'In wallets', hint: 'Oracle value of lending-market shares committed via Aqua. Held by the wallets themselves, never by YieldSolver.' },
-    { key: 'earned', label: 'Earned by wallets', hint: 'JIT fees and market-making spread paid back to wallets as shares. Measured, not annualised.' },
-    { key: 'moves', label: 'Keeper moves', hint: 'Rebalances of wallet shares between listed markets (e.g. Morpho → Aave) toward the best APY.' },
-    { key: 'apy', label: 'Best lending APY' },
+    { key: 'value', label: 'In wallets', icon: 'wallet', hint: 'Oracle value of lending-market shares committed via Aqua. Held by the wallets themselves, never by YieldSolver.' },
+    { key: 'earned', label: 'Earned by wallets', icon: 'coins', hint: 'JIT fees and market-making spread paid back to wallets as shares. Measured, not annualised.' },
+    { key: 'moves', label: 'Keeper moves', icon: 'refresh', hint: 'Rebalances of wallet shares between listed markets (e.g. Morpho → Aave) toward the best APY.' },
+    { key: 'apy', label: 'Best lending APY', icon: 'percent' },
   ]);
   store.subscribe(({ snapshot }) => {
     if (!snapshot) return;
@@ -195,19 +198,19 @@ export function mountScStats(root: HTMLElement): void {
 /** Carry overview: on/off, TVL, the live spread that drives it, LTV, vault APY in ETH terms and the open carry's PnL. */
 export function mountCarryStats(root: HTMLElement): void {
   const set = tiles(root, [
-    { key: 'status', label: 'Carry', hint: 'ON while USDC is borrowed against the ETH collateral and parked in a sink. OFF: plain ETH collateral, waiting for a spread worth taking.' },
-    { key: 'tvl', label: 'Total value locked', hint: 'ETH collateral plus any carry profit (USDC in sinks minus debt), oracle-priced.' },
-    { key: 'spread', label: 'Live spread', hint: 'Best sink net APY (supply APY + haircut rewards) minus the USDC borrow APR, in percentage points.' },
-    { key: 'ltv', label: 'Loan-to-value', hint: 'USDC debt / ETH collateral value. The contract refuses to borrow past the max; above the deleverage line anyone can force a repay.' },
-    { key: 'apy', label: 'Vault APY', hint: 'Share price growth in ETH terms: Aave collateral yield plus harvested carry profit.' },
-    { key: 'pnl', label: 'Carry PnL', hint: 'USDC held in sinks minus USDC owed. Harvested into ETH by the keeper.' },
+    { key: 'status', label: 'Carry', icon: 'power', hint: 'ON while USDC is borrowed against the ETH collateral and parked in a sink. OFF: plain ETH collateral, waiting for a spread worth taking.' },
+    { key: 'tvl', label: 'Total value locked', icon: 'vault', hint: 'ETH collateral plus any carry profit (USDC in sinks minus debt), oracle-priced.' },
+    { key: 'spread', label: 'Live spread', icon: 'pulse', hint: 'Best sink net APY (supply APY + haircut rewards) minus the USDC borrow APR, in percentage points.' },
+    { key: 'ltv', label: 'Loan-to-value', icon: 'gauge', hint: 'USDC debt / ETH collateral value. The contract refuses to borrow past the max; above the deleverage line anyone can force a repay.' },
+    { key: 'apy', label: 'Vault APY', icon: 'percent', hint: 'Share price growth in ETH terms: Aave collateral yield plus harvested carry profit.' },
+    { key: 'pnl', label: 'Carry PnL', icon: 'coins', hint: 'USDC held in sinks minus USDC owed. Harvested into ETH by the keeper.' },
   ]);
   store.subscribe(({ snapshot }) => {
     const c = snapshot?.carry;
     if (!c) return;
     const on = c.status === 'on';
     set('status', {
-      value: `<span class="status ${on ? 'is-done' : ''} status-lg">${on ? 'ON' : 'OFF'}</span>`,
+      value: `<span class="status ${on ? 'is-live' : ''} status-lg">${on ? 'On' : 'Off'}</span>`,
       sub: on ? `borrowing <span class="num">${usd(c.debtUsd, 0)}</span> USDC` : 'waiting for a spread',
       note: c.decision ? `checked ${ago(Date.now() - c.decision.t * 1000)}` : undefined,
     });

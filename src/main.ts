@@ -17,6 +17,8 @@ import { mountTopbar } from './components/topbar.ts';
 import { mountWallet } from './components/wallet.ts';
 import { POLL, PROFILE_NAMES } from './config.ts';
 import { $, esc, short } from './format.ts';
+import { icon, installCopy } from './icons.ts';
+import { mountSectionFocus } from './section-focus.ts';
 import { store } from './store.ts';
 
 /* ── Layout ─────────────────────────────── */
@@ -66,6 +68,7 @@ const boot = $(app, '[data-boot]');
 const body = $(app, '[data-body]');
 const banner = $(app, '[data-banner]');
 const m = (id: string) => $(app, `[data-mount="${id}"]`);
+mountSectionFocus(page);
 
 /* ── Live data ──────────────────────────── */
 
@@ -121,7 +124,15 @@ function retry(): void {
 
 /* ── Boot / error states ────────────────── */
 
-const loadingHtml = `<div class="boot-card"><i class="spinner spinner-lg" aria-hidden="true"></i><p>Connecting to Base Sepolia…</p><small class="muted">Reading vaults, markets and the order book.</small></div>`;
+/** Skeleton of the page (switcher, hero, stat row, two columns) while the first snapshot loads. */
+const loadingHtml = `
+  <div class="skel" aria-hidden="true">
+    <div class="skel-switch"><i></i><i></i><i></i><i></i></div>
+    <div class="skel-hero"><i class="w-20"></i><i class="w-60 h-lg"></i><i class="w-80"></i></div>
+    <div class="skel-stats">${'<div><i class="w-40"></i><i class="w-60 h-lg"></i><i class="w-80"></i></div>'.repeat(4)}</div>
+    <div class="skel-cols"><div>${'<i></i>'.repeat(6)}</div><div>${'<i></i>'.repeat(4)}</div></div>
+  </div>
+  <p class="boot-status"><i class="spinner" aria-hidden="true"></i>Connecting to Base Sepolia · reading vaults, markets and the order book…</p>`;
 boot.innerHTML = loadingHtml;
 
 store.subscribe(({ snapshot, snapshotError }) => {
@@ -131,15 +142,16 @@ store.subscribe(({ snapshot, snapshotError }) => {
   if (!ready && snapshotError) {
     boot.innerHTML = `
       <div class="boot-card">
+        <span class="boot-ico">${icon('alert', 20)}</span>
         <p><b>Can’t reach the live system</b></p>
         <small class="muted">${esc(snapshotError)}. The relayer or RPC may be restarting.</small>
-        <button type="button" class="btn btn-secondary" data-retry>Retry</button>
+        <button type="button" class="btn btn-secondary" data-retry>${icon('refresh')}<span>Retry</span></button>
       </div>`;
     $(boot, '[data-retry]').addEventListener('click', retry);
   }
   banner.hidden = !(ready && snapshotError);
   if (ready && snapshotError && !banner.childElementCount) {
-    banner.innerHTML = `<span>Live data paused: ${esc(snapshotError)}. Showing the last snapshot.</span><button type="button" class="link-btn" data-retry>Retry now</button>`;
+    banner.innerHTML = `<span class="banner-msg">${icon('alert')}<span>Live data paused: ${esc(snapshotError)}. Showing the last snapshot.</span></span><button type="button" class="link-btn" data-retry>${icon('refresh')}<span>Retry now</span></button>`;
     $(banner, '[data-retry]').addEventListener('click', () => void pollSnapshot());
   } else if (!snapshotError) banner.innerHTML = '';
 });
@@ -165,12 +177,14 @@ store.subscribe(({ snapshot }) => {
     ['WETH', c.weth],
   ];
   $(app, '[data-foot]').innerHTML = `
-    <div class="contracts">${items.map(([n, a]) => `<a href="${addrUrl(a)}" target="_blank" rel="noopener"><span>${n}</span> <span class="num">${short(a)}</span></a>`).join('')}</div>
-    <p>Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolvers · self-custody via 1inch Aqua${snapshot.carry ? ' · conditional ETH carry on Aave' : ''}.</p>`;
+    <h2 class="foot-title">${icon('file')}<span>Contracts</span></h2>
+    <div class="contracts">${items.map(([n, a]) => `<a href="${addrUrl(a)}" target="_blank" rel="noopener"><span>${n}</span><span class="mono">${short(a)}</span></a>`).join('')}</div>
+    <p class="foot-note">Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolvers · self-custody via 1inch Aqua${snapshot.carry ? ' · conditional ETH carry on Aave' : ''}.</p>`;
 });
 
 /* ── Mount ──────────────────────────────── */
 
+installCopy();
 mountTopbar($(app, '.topbar'));
 mountScExplainer(m('sc-hero'));
 mountScStats($(app, '.stats[data-only="sc"]'));
