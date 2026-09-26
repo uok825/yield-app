@@ -69,24 +69,28 @@ bots, 16 checks).
 
 | Contract | Address |
 |---|---|
-| Aqua | `0xdeEe49292CF979c7b70B0178356F0EB0ccF4C7fb` |
-| AquaYieldApp (self-custody) | `0xc84AE0f7Aa3D61679DE522f54b307713Ae801626` |
-| WalletResolver | `0x0D5eB0a1934b9466FD4C763D6C8822E69FaEb0cf` |
-| YieldSwapVMRouter (SwapVM) | `0x1e547BC55D093b0F0E519B71FBC6095FAEF8E5F1` |
-| SwapVMResolver | `0x6cDCEB3e34DD47f5ffb63D297F4C70e590015E4b` |
-| YieldSwapVMStrategies (order builder) | `0x418D61b0a275c7a3B4556d59e5677412F744E529` |
-| YieldVault (A) | `0xF267dCD5ed085B222495748F90b0FC07F125Ef23` |
-| InventoryVaults (B: 70/30 · 50/50 · 30/70) | `0x2939d967…4297` · `0xdE440e7F…8C2D` · `0xF15a8Bbb…80bb` |
-| YieldResolver | `0x07bA78782d894358A96cb39b3F7eB939c622215e` |
-| CarryVault (C) | `0x7eaCf93332803b8F63948FaA9c5A22652eb054C1` |
-| 1inch LimitOrderProtocol v4 · Fusion SimpleSettlement | `0x676d295f7050d319bd596Ba4df12eC63eC151c93` · `0x6F4b0bAbcaCf20E50762BcEeD5324bBb55B59000` |
+| Aqua | [`0xdeEe49292CF979c7b70B0178356F0EB0ccF4C7fb`](https://sepolia.basescan.org/address/0xdeEe49292CF979c7b70B0178356F0EB0ccF4C7fb) |
+| AquaYieldApp (self-custody) | [`0xc84AE0f7Aa3D61679DE522f54b307713Ae801626`](https://sepolia.basescan.org/address/0xc84AE0f7Aa3D61679DE522f54b307713Ae801626) |
+| WalletResolver | [`0x0D5eB0a1934b9466FD4C763D6C8822E69FaEb0cf`](https://sepolia.basescan.org/address/0x0D5eB0a1934b9466FD4C763D6C8822E69FaEb0cf) |
+| YieldSwapVMRouter (SwapVM) | [`0x1e547BC55D093b0F0E519B71FBC6095FAEF8E5F1`](https://sepolia.basescan.org/address/0x1e547BC55D093b0F0E519B71FBC6095FAEF8E5F1) |
+| SwapVMResolver | [`0x6cDCEB3e34DD47f5ffb63D297F4C70e590015E4b`](https://sepolia.basescan.org/address/0x6cDCEB3e34DD47f5ffb63D297F4C70e590015E4b) |
+| YieldSwapVMStrategies (order builder) | [`0x418D61b0a275c7a3B4556d59e5677412F744E529`](https://sepolia.basescan.org/address/0x418D61b0a275c7a3B4556d59e5677412F744E529) |
+| YieldVault (A) | [`0xF267dCD5ed085B222495748F90b0FC07F125Ef23`](https://sepolia.basescan.org/address/0xF267dCD5ed085B222495748F90b0FC07F125Ef23) |
+| InventoryVault 70/30 (B) | [`0x2939d96760eD1F96c4fe8724f5Bed72Daf9f4297`](https://sepolia.basescan.org/address/0x2939d96760eD1F96c4fe8724f5Bed72Daf9f4297) |
+| InventoryVault 50/50 (B) | [`0xdE440e7F8A1334BD6B4233BeF2A2b59b70A68C2D`](https://sepolia.basescan.org/address/0xdE440e7F8A1334BD6B4233BeF2A2b59b70A68C2D) |
+| InventoryVault 30/70 (B) | [`0xF15a8Bbb7B3c0eE7281B336D77D6b23e576380bb`](https://sepolia.basescan.org/address/0xF15a8Bbb7B3c0eE7281B336D77D6b23e576380bb) |
+| YieldResolver | [`0x07bA78782d894358A96cb39b3F7eB939c622215e`](https://sepolia.basescan.org/address/0x07bA78782d894358A96cb39b3F7eB939c622215e) |
+| CarryVault (C) | [`0x7eaCf93332803b8F63948FaA9c5A22652eb054C1`](https://sepolia.basescan.org/address/0x7eaCf93332803b8F63948FaA9c5A22652eb054C1) |
+| 1inch LimitOrderProtocol v4 | [`0x676d295f7050d319bd596Ba4df12eC63eC151c93`](https://sepolia.basescan.org/address/0x676d295f7050d319bd596Ba4df12eC63eC151c93) |
+| 1inch Fusion SimpleSettlement | [`0x6F4b0bAbcaCf20E50762BcEeD5324bBb55B59000`](https://sepolia.basescan.org/address/0x6F4b0bAbcaCf20E50762BcEeD5324bBb55B59000) |
 
 Example transactions:
 - SwapVM fill from wallet shares: [`0x338e9cc5…`](https://sepolia.basescan.org/tx/0x338e9cc5793051011ec509088b4d3362e52eb318a7aee85868906dcc8690fd5e)
 - JIT fill from the vault: [`0x223675b2…`](https://sepolia.basescan.org/tx/0x223675b27edac19bde3511b5fad6186c789c5761dfc4e76a01c2726a1f88e5f5)
 
-The contracts are also linked to **MultiBaas** (Curvegrid), whose TX Explorer decodes these transactions (function
-arguments and events) without Basescan source verification.
+The contracts are also linked to **MultiBaas** (Curvegrid): [pnaxqb6e5rcsle25gfc7m5cgiu.multibaas.com](https://pnaxqb6e5rcsle25gfc7m5cgiu.multibaas.com).
+Its TX Explorer decodes these transactions (function arguments and events) without Basescan source verification, and
+it indexes our contracts' events (Aqua pulls/pushes, SwapVM swaps, Fusion fills).
 
 Testnet note: lending markets, oracle and router are mocks driven by a simulator. The ETH price mirrors Chainlink on
 Base mainnet. The dashboard shows **realised** returns until a full 24h of data exists, because annualising a few hours
