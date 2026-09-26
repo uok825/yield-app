@@ -11,7 +11,8 @@ import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts'
 
 import { mockERC20Abi } from './abis.ts'
 import { type Context, erc20Abi, sleep, write } from './chain.ts'
-import { RATE_BUMP_BASE, lopDomain, newFusionOrder, signOrder } from './fusion.ts'
+import { lopDomain, signOrder } from './fusion.ts'
+import { buildQuote } from './quote.ts'
 import { logger } from './log.ts'
 import { count, runEvery } from './loop.ts'
 import { decimals, ethUsd } from './prices.ts'
@@ -108,44 +109,22 @@ export type Side = 'buy-eth' | 'sell-eth'
 export async function placeOrder(ctx: Context, m: Maker, side: Side, usd: number): Promise<Hex> {
   const { cfg, d } = ctx
   const { price } = await ethUsd(ctx)
-  const [usdcDec, wethDec] = await Promise.all([decimals(ctx, d.usdc), decimals(ctx, d.weth)])
-  const toUnits = (value: number, dec: number) => parseUnits(value.toFixed(dec), dec)
-
   const buyEth = side === 'buy-eth'
   const makerAsset = buyEth ? d.usdc : d.weth
   const takerAsset = buyEth ? d.weth : d.usdc
-  const makingAmount = buyEth ? toUnits(usd, usdcDec) : toUnits(usd / price, wethDec)
-  const fairTaking = buyEth ? usd / price : usd
-  const takerDec = buyEth ? wethDec : usdcDec
-
-  // Auction: starts `startPremiumBps` above fair value, decays to `minDiscountBps` below it.
-  const minTaking = toUnits(fairTaking * (1 - cfg.maker.minDiscountBps / 10_000), takerDec)
-  const startFactor = (1 + cfg.maker.startPremiumBps / 10_000) / (1 - cfg.maker.minDiscountBps / 10_000)
-  const initialRateBump = Math.round((startFactor - 1) * Number(RATE_BUMP_BASE))
+  const dec = await decimals(ctx, makerAsset)
+  const makingAmount = parseUnits((buyEth ? usd : usd / price).toFixed(dec), dec)
 
   await ensureFunds(ctx, m, makerAsset, makingAmount)
-
-  const now = (await ctx.client.getBlock()).timestamp
-  const order = newFusionOrder({
-    settlement: d.fusionSettlement,
-    resolvers: [d.resolver],
-    maker: m.account.address,
-    makerAsset,
-    takerAsset,
-    makingAmount,
-    minTakingAmount: minTaking,
-    initialRateBump,
-    auctionStart: now + BigInt(cfg.maker.auctionDelaySec),
-    auctionDuration: BigInt(cfg.maker.auctionDurationSec),
-  })
-  const signed = await signOrder(m.account, await lopDomain(ctx), order)
+  const q = await buildQuote(ctx, { maker: m.account.address, makerAsset, takerAsset, makingAmount })
+  const signed = await signOrder(m.account, await lopDomain(ctx), q.order)
   await relayerClient(cfg.relayer.url).submit(signed)
   log.info('order posted', {
     maker: m.index,
     side,
     usd: usd.toFixed(0),
-    making: formatUnits(makingAmount, buyEth ? usdcDec : wethDec),
-    minTaking: formatUnits(minTaking, takerDec),
+    making: formatUnits(makingAmount, dec),
+    minTaking: q.minTaking.toString(),
     order: signed.orderHash.slice(0, 10),
   })
   return signed.orderHash

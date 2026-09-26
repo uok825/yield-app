@@ -85,6 +85,8 @@ export function loadConfig() {
     deploymentsFile: process.env.DEPLOYMENTS_FILE,
     stateDir: resolve(env('STATE_DIR', join(here, '../.state'))),
     explorerUrl: process.env.EXPLORER_URL ?? '',
+    /** Max block span per eth_getLogs call (public Base RPC allows 1,000). */
+    logBlockRange: BigInt(num('LOG_BLOCK_RANGE', 500)),
 
     keys: {
       deployer: optionalKey('DEPLOYER_PRIVATE_KEY'),

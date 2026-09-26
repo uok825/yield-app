@@ -12,6 +12,8 @@
  *   GET  /v1/orders?maker=&status=   history
  *   GET  /v1/orders/:hash            one order
  *   POST /v1/orders/:hash/report     resolver fill report (route, profit) — informational
+ *   GET  /v1/snapshot                both strategies' state, APYs and fee income (for dashboards)
+ *   POST /v1/quote                   build an unsigned Fusion order for a wallet to sign (EIP-712)
  *   GET  /v1/stats                   counters
  *   GET  /v1/bots                    status of bots running in this process
  */
@@ -23,7 +25,9 @@ import { buildOrderTypedData } from '@1inch/limit-order-sdk'
 import { Address as OneInchAddress } from '@1inch/fusion-sdk'
 
 import { erc20Abi, type Context } from './chain.ts'
-import { decodeOrder, lopDomain, orderHash, type SignedOrder } from './fusion.ts'
+import { decodeOrder, lopDomain, orderHash, typedDataFor, type SignedOrder } from './fusion.ts'
+import { buildQuote, QuoteError } from './quote.ts'
+import { Snapshotter, logSnapshotError } from './snapshot.ts'
 import { limitOrderProtocolAbi } from './abis.ts'
 import { logger } from './log.ts'
 import { count, runEvery, status, statuses } from './loop.ts'
@@ -175,7 +179,7 @@ async function syncChain(ctx: Context, store: OrderStore) {
   if (store.lastBlock === 0n) store.lastBlock = BigInt(ctx.d.deployBlock || Number(head))
   let from = store.lastBlock + 1n
   while (from <= head) {
-    const to = from + 1_999n < head ? from + 1_999n : head
+    const to = from + ctx.cfg.logBlockRange - 1n < head ? from + ctx.cfg.logBlockRange - 1n : head
     const logs = await ctx.client.getLogs({ address: ctx.d.limitOrderProtocol, fromBlock: from, toBlock: to })
     for (const ev of parseEventLogs({ abi: limitOrderProtocolAbi, logs, eventName: ['OrderFilled', 'OrderCancelled'] })) {
       const o = store.get(ev.args.orderHash)
@@ -251,6 +255,7 @@ export async function startRelayer(ctx: Context, signal: AbortSignal) {
   mkdirSync(cfg.stateDir, { recursive: true })
   const store = new OrderStore(join(cfg.stateDir, `relayer-${ctx.chain.id}.json`))
   const domain = await lopDomain(ctx)
+  const snapshot = new Snapshotter(ctx)
   status('relayer')
 
   const server = createServer(async (req, res) => {
@@ -314,6 +319,42 @@ export async function startRelayer(ctx: Context, signal: AbortSignal) {
         store.flush()
         return send(res, 200, { ok: true })
       }
+      if (req.method === 'GET' && path === '/v1/snapshot') {
+        return send(res, 200, await snapshot.get())
+      }
+      if (req.method === 'POST' && path === '/v1/quote') {
+        const b = (await readBody(req)) as Record<string, string>
+        for (const k of ['maker', 'makerAsset', 'takerAsset']) {
+          if (!isAddress(b?.[k] ?? '')) throw new ValidationError(`${k} must be an address`)
+        }
+        if (!/^\d+$/.test(String(b.makingAmount ?? ''))) throw new ValidationError('makingAmount must be an integer string')
+        try {
+          const q = await buildQuote(ctx, {
+            maker: b.maker as Address,
+            makerAsset: b.makerAsset as Address,
+            takerAsset: b.takerAsset as Address,
+            makingAmount: BigInt(b.makingAmount),
+          })
+          count('relayer', 'quotes')
+          return send(res, 200, {
+            orderHash: orderHash(domain, q.order),
+            order: q.order.build(),
+            extension: q.order.extension.encode(),
+            typedData: typedDataFor(domain, q.order),
+            quote: {
+              fairTaking: q.fairTaking,
+              startTaking: q.startTaking,
+              minTaking: q.minTaking,
+              auctionStart: q.auctionStart,
+              auctionEnd: q.auctionEnd,
+              ethUsd: q.ethUsd,
+            },
+          })
+        } catch (err) {
+          if (err instanceof QuoteError) throw new ValidationError(err.message)
+          throw err
+        }
+      }
       if (req.method === 'GET' && path === '/v1/stats') {
         const byStatus: Record<string, number> = {}
         for (const o of store.all()) byStatus[o.status] = (byStatus[o.status] ?? 0) + 1
@@ -338,6 +379,9 @@ export async function startRelayer(ctx: Context, signal: AbortSignal) {
   log.info('listening', { url: `http://${cfg.relayer.host}:${cfg.relayer.port}`, lop: ctx.d.limitOrderProtocol })
   signal.addEventListener('abort', () => server.close(), { once: true })
 
-  await runEvery('relayer', cfg.relayer.pollMs, signal, () => syncChain(ctx, store))
+  await runEvery('relayer', cfg.relayer.pollMs, signal, async () => {
+    await syncChain(ctx, store)
+    await snapshot.sync().catch(logSnapshotError)
+  })
   store.flush()
 }

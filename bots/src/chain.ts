@@ -40,6 +40,8 @@ export interface Context {
   wallet(role: 'deployer' | 'keeper' | 'operator'): Wallet
   walletFor(key: Hex): Wallet
   txUrl(hash: Hex): string
+  /** Block explorer base URL ('' if unknown). */
+  explorer: string
 }
 
 /** Connects to RPC_URL, detects the chain and loads its deployment file. */
@@ -81,6 +83,7 @@ export async function createContext(cfg: Config = loadConfig()): Promise<Context
       return walletFor(key)
     },
     txUrl: (hash) => (explorer ? `${explorer}/tx/${hash}` : hash),
+    explorer,
   }
 }
 

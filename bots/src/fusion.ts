@@ -104,6 +104,12 @@ function typedData(domain: Domain, struct: LimitOrderV4Struct) {
   return buildOrderTypedData(domain.chainId, domain.verifyingContract, domain.name, domain.version, struct)
 }
 
+/** EIP-712 payload in the shape wallets expect for eth_signTypedData_v4 (JSON-safe). */
+export function typedDataFor(domain: Domain, order: FusionOrder) {
+  const td = typedData(domain, order.build())
+  return { domain: td.domain, types: { Order: td.types.Order }, primaryType: 'Order' as const, message: td.message }
+}
+
 export function orderHash(domain: Domain, order: FusionOrder): Hex {
   return getOrderHash(typedData(domain, order.build())) as Hex
 }
