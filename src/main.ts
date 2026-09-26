@@ -2,6 +2,8 @@ import './style.css';
 import { type OrderRecord, getOrders, getSnapshot } from './api.ts';
 import { addrUrl, initWallet, refreshBalances } from './chain.ts';
 import { mountAllocation } from './components/allocation.ts';
+import { mountCarryActivity, mountCarryDecision, mountCarryExplainer, mountCarryPosition } from './components/carry.ts';
+import { mountCarryDeposit } from './components/carry-deposit.ts';
 import { mountDeposit } from './components/deposit.ts';
 import { mountFills } from './components/fills.ts';
 import { mountIntent } from './components/intent.ts';
@@ -9,7 +11,7 @@ import { mountMmDeposit } from './components/mm-deposit.ts';
 import { mountProfiles } from './components/profiles.ts';
 import { mountScWallet } from './components/sc-wallet.ts';
 import { mountScExplainer, mountScMarkets, mountScStrategies } from './components/self-custody.ts';
-import { mountMmStats, mountScStats, mountStats } from './components/stats.ts';
+import { mountCarryStats, mountMmStats, mountScStats, mountStats } from './components/stats.ts';
 import { mountSwitcher } from './components/switcher.ts';
 import { mountTopbar } from './components/topbar.ts';
 import { mountWallet } from './components/wallet.ts';
@@ -31,6 +33,8 @@ app.innerHTML = `
       <section class="stats" data-only="sc" aria-label="Self-custody overview"></section>
       <section class="stats" data-only="a" aria-label="Strategy A overview"></section>
       <section class="stats" data-only="b" aria-label="Strategy B overview"></section>
+      <section class="card sc-hero carry-hero" data-only="carry" data-mount="carry-hero" aria-label="How conditional carry works"></section>
+      <section class="stats stats-6" data-only="carry" aria-label="Carry overview"></section>
       <div class="grid">
         <div class="col-main">
           <section class="card o-alloc" data-only="sc" data-mount="sc-markets"></section>
@@ -40,12 +44,16 @@ app.innerHTML = `
           <section class="card o-alloc" data-only="b" data-mount="alloc-b"></section>
           <section class="card o-fills" data-only="a" data-mount="fills-a"></section>
           <section class="card o-fills" data-only="b" data-mount="fills-b"></section>
+          <section class="card o-alloc" data-only="carry" data-mount="carry-decision"></section>
+          <section class="card o-alloc" data-only="carry" data-mount="carry-position"></section>
+          <section class="card o-fills" data-only="carry" data-mount="carry-activity"></section>
         </div>
         <div class="col-side">
           <section class="card o-sc area-wallet" data-only="sc" data-mount="sc-wallet"></section>
           <section class="card o-intent" data-mount="intent"></section>
           <section class="card o-deposit" data-only="a" data-mount="deposit-a"></section>
           <section class="card o-deposit" data-only="b" data-mount="deposit-b"></section>
+          <section class="card o-deposit" data-only="carry" data-mount="deposit-carry"></section>
           <section class="card o-wallet area-wallet" data-mount="wallet"></section>
         </div>
       </div>
@@ -146,6 +154,7 @@ store.subscribe(({ snapshot }) => {
   const sc = snapshot.selfCustody;
   const items: [string, string][] = [
     ...(sc ? ([['Aqua', sc.aqua], ['AquaYieldApp', sc.app], ['Wallet resolver', sc.resolver]] as [string, string][]) : []),
+    ...(snapshot.carry ? ([['CarryVault', snapshot.carry.vault]] as [string, string][]) : []),
     ['YieldVault', c.vault],
     ...c.inventoryVaults.map((a, i): [string, string] => [`Inventory · ${PROFILE_NAMES[i]}`, a]),
     ['Resolver', c.resolver],
@@ -157,7 +166,7 @@ store.subscribe(({ snapshot }) => {
   ];
   $(app, '[data-foot]').innerHTML = `
     <div class="contracts">${items.map(([n, a]) => `<a href="${addrUrl(a)}" target="_blank" rel="noopener"><span>${n}</span> <span class="num">${short(a)}</span></a>`).join('')}</div>
-    <p>Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolvers · self-custody via 1inch Aqua.</p>`;
+    <p>Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolvers · self-custody via 1inch Aqua${snapshot.carry ? ' · conditional ETH carry on Aave' : ''}.</p>`;
 });
 
 /* ── Mount ──────────────────────────────── */
@@ -175,9 +184,15 @@ mountAllocation(m('alloc-a'));
 mountProfiles(m('alloc-b'));
 mountFills(m('fills-a'), 'jit');
 mountFills(m('fills-b'), 'inventory');
+mountCarryExplainer(m('carry-hero'));
+mountCarryStats($(app, '.stats[data-only="carry"]'));
+mountCarryDecision(m('carry-decision'));
+mountCarryPosition(m('carry-position'));
+mountCarryActivity(m('carry-activity'));
 mountIntent(m('intent'));
 mountDeposit(m('deposit-a'));
 mountMmDeposit(m('deposit-b'));
+mountCarryDeposit(m('deposit-carry'));
 mountWallet(m('wallet'));
 mountSwitcher($(app, '.switcher'), (id) => (page.dataset.strategy = id));
 

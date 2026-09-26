@@ -1,6 +1,6 @@
 /** Thin client for the YieldSolver relayer HTTP API. Bigints arrive as decimal strings and are parsed here. */
 import type { Address, Hex } from 'viem';
-import { RELAYER_URL } from './config.ts';
+import { MARKET_NAMES, RELAYER_URL } from './config.ts';
 
 export interface Market {
   adapter: Address;
@@ -120,6 +120,69 @@ export interface SelfCustody {
   totals: { wallets: number; valueUsd: number; earnedUsd: number; jitFeesUsd: number; spreadUsd: number; rebalances: number };
 }
 
+/* ── Conditional carry ───────────────────── */
+
+export type CarryEventKind = 'Opened' | 'Closed' | 'Rotated' | 'Deleveraged' | 'Harvested' | 'ShortfallRepaid';
+
+/** A whitelisted ERC-4626 USDC market the carry vault may park borrowed USDC in. APYs and spreads in %. */
+export interface CarrySink {
+  address: Address;
+  name: string; // share symbol, e.g. 'mmUSDC'
+  valueUsd: number; // the vault's position
+  capUsd: number;
+  apy: number | null;
+  rewardApr: number;
+  netApy: number | null; // apy + haircut reward
+  spreadPct: number | null; // netApy − borrow APR, percentage points
+}
+
+/** The keeper's latest carry decision (written each tick). */
+export interface CarryDecision {
+  t: number; // unix s
+  status: 'on' | 'off';
+  reason: string;
+  spreadPct: number | null;
+  best?: Address;
+  borrowApr: number | null;
+  sinkApys: Record<Address, number | null>;
+  exitCounter: number;
+  executed: string[];
+}
+
+export interface CarryEvent {
+  block: string;
+  tx: Hex;
+  kind: CarryEventKind;
+  detail: Record<string, string>;
+}
+
+/** CarryVault: ETH collateral on Aave, USDC borrowed into sinks only while the spread pays. USD figures are oracle-priced. */
+export interface Carry {
+  vault: Address;
+  creditMarket: Address | null;
+  status: 'on' | 'off';
+  collateralWeth: number;
+  collateralUsd: number;
+  debtUsd: number;
+  stableUsd: number;
+  carryPnlUsd: number; // stableUsd − debtUsd
+  tvlWeth: number;
+  tvlUsd: number;
+  ltvPct: number;
+  maxLtvPct: number;
+  deleverageLtvPct: number;
+  targetLtvPct: number;
+  healthFactor: number | null; // null while there is no debt
+  borrowApr: number | null;
+  vaultApy: number | null; // in ETH terms
+  rules: { enterSpreadPct: number; exitSpreadPct: number; exitConfirmations: number; horizonHours: number; costMultiple: number; maxSinkSharePct: number };
+  sinks: CarrySink[];
+  decision: CarryDecision | null;
+  counts: Record<CarryEventKind, number>;
+  harvestedWeth: number;
+  events: CarryEvent[]; // newest first
+}
+
 export interface Snapshot {
   chainId: number;
   mock: boolean;
@@ -161,6 +224,8 @@ export interface Snapshot {
   };
   /** Null on deployments without the self-custody app. */
   selfCustody: SelfCustody | null;
+  /** Null on deployments without the carry vault. */
+  carry: Carry | null;
 }
 
 export type OrderStatus = 'pending' | 'filled' | 'expired' | 'cancelled';
@@ -289,13 +354,53 @@ function parseSelfCustody(sc: any): SelfCustody | null {
   };
 }
 
+const CARRY_KINDS: CarryEventKind[] = ['Opened', 'Closed', 'Rotated', 'Deleveraged', 'Harvested', 'ShortfallRepaid'];
+
+function parseCarry(c: any): Carry | null {
+  if (!c || typeof c !== 'object' || !c.vault) return null;
+  const d = c.decision;
+  return {
+    ...c,
+    healthFactor: n(c.healthFactor),
+    borrowApr: n(c.borrowApr),
+    vaultApy: n(c.vaultApy),
+    sinks: (c.sinks ?? []).map((x: any) => ({
+      ...x,
+      valueUsd: num0(x.valueUsd),
+      capUsd: num0(x.capUsd),
+      apy: n(x.apy),
+      rewardApr: num0(x.rewardApr),
+      netApy: n(x.netApy),
+      spreadPct: n(x.spreadPct),
+    })),
+    decision: d && typeof d === 'object' ? { ...d, t: num0(d.t), spreadPct: n(d.spreadPct), borrowApr: n(d.borrowApr), exitCounter: num0(d.exitCounter), executed: d.executed ?? [] } : null,
+    counts: Object.fromEntries(CARRY_KINDS.map((k) => [k, num0(c.counts?.[k])])) as Record<CarryEventKind, number>,
+    harvestedWeth: num0(c.harvestedWeth),
+    events: c.events ?? [],
+  };
+}
+
+/** The carry vault is also listed as a self-custody WETH market; the relayer names it generically, so label it here. */
+function labelCarryMarket(sc: SelfCustody | null, carry: Carry | null): SelfCustody | null {
+  if (!sc || !carry) return sc;
+  const isCarry = (a: string) => a.toLowerCase() === carry.vault.toLowerCase();
+  const name = MARKET_NAMES.carry;
+  return {
+    ...sc,
+    markets: sc.markets.map((m) => (isCarry(m.address) ? { ...m, name } : m)),
+    strategies: sc.strategies.map((st) => ({ ...st, positions: st.positions.map((p) => (isCarry(p.market) ? { ...p, name } : p)) })),
+  };
+}
+
 export async function getSnapshot(): Promise<Snapshot> {
   const s: any = await call('/v1/snapshot');
   const a = s.strategyA;
+  const carry = parseCarry(s.carry);
   return {
     ...s,
     block: big(s.block),
-    selfCustody: parseSelfCustody(s.selfCustody),
+    selfCustody: labelCarryMarket(parseSelfCustody(s.selfCustody), carry),
+    carry,
     strategyA: {
       ...a,
       tvl: big(a.tvl),

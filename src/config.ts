@@ -26,4 +26,4 @@ export const FAUCET = { usdc: 10_000n, weth: 3n } as const;
 export const PROFILE_NAMES = ['Stable', 'Balanced', 'ETH-heavy'] as const;
 
 /** Friendly names for Strategy A market adapters (snapshot names are lowercase ids). */
-export const MARKET_NAMES: Record<string, string> = { morpho: 'Morpho Blue', aave: 'Aave V3', fluid: 'Fluid' };
+export const MARKET_NAMES: Record<string, string> = { morpho: 'Morpho Blue', aave: 'Aave V3', fluid: 'Fluid', carry: 'Carry (ETH)' };

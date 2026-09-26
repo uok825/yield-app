@@ -6,7 +6,8 @@ import { store } from '../store.ts';
 import { MEASURING } from './yield.ts';
 
 /** Colour key shared with the allocation swatches. */
-export const marketKey = (name: string) => (/morpho/i.test(name) ? 'morpho' : /fluid/i.test(name) ? 'fluid' : /aave/i.test(name) ? 'aave' : 'reserve');
+export const marketKey = (name: string) =>
+  /morpho/i.test(name) ? 'morpho' : /fluid/i.test(name) ? 'fluid' : /aave/i.test(name) ? 'aave' : /carry/i.test(name) ? 'carry' : 'reserve';
 
 export const apyText = (apy: number | null) => (apy === null ? MEASURING : `<span class="num">${pct(apy)}</span>`);
 
@@ -18,6 +19,8 @@ const ICONS = {
   commit: `<rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="m5.5 8 1.8 1.8 3.2-3.4"/>`,
   earn: `<path d="M2.5 11.5 6 8l2.5 2.5 5-5"/><path d="M10 5.5h3.5V9"/>`,
   lock: `<rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>`,
+  exit: `<path d="M9.5 2.5h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3"/><path d="M10 8H2.5M5 5.5 2.5 8 5 10.5"/>`,
+  shield: `<path d="M8 1.5 2.75 3.5v4c0 3.1 2.2 5.9 5.25 7 3.05-1.1 5.25-3.9 5.25-7v-4L8 1.5Z"/><path d="m5.6 8.1 1.7 1.7 3.1-3.3"/>`,
 };
 export const icon = (k: keyof typeof ICONS, cls = 'ico') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[k]}</svg>`;
 

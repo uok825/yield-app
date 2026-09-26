@@ -19,11 +19,11 @@ import {
   numberToHex,
   parseEventLogs,
 } from 'viem';
-import { aave4626Abi, aquaAbi, aquaYieldAppAbi, inventoryVaultAbi, mockERC20Abi, yieldVaultAbi } from '../bots/src/abis.ts';
-import type { SelfCustody, Snapshot } from './api.ts';
+import { aave4626Abi, aquaAbi, aquaYieldAppAbi, carryVaultAbi, inventoryVaultAbi, mockERC20Abi, yieldVaultAbi } from '../bots/src/abis.ts';
+import type { Carry, SelfCustody, Snapshot } from './api.ts';
 import { CHAIN, CHAIN_ID, RPC_URL } from './config.ts';
 import { units } from './format.ts';
-import { type Balances, type ScCommit, type ScHolding, type WalletState, store } from './store.ts';
+import { type Balances, type CarryPosition, type ScCommit, type ScHolding, type WalletState, store } from './store.ts';
 
 export const publicClient = createPublicClient({ chain: CHAIN, transport: http(RPC_URL, { batch: true, retryCount: 2 }) });
 
@@ -164,7 +164,24 @@ async function readBalances(user: Address, snap: Snapshot): Promise<Balances> {
     a: { shares: aShares, assets: aAssets, maxRedeem },
     b: bShares.map((shares, i) => ({ shares, stable: bOut[i][0], volatile: bOut[i][1] })),
     sc: snap.selfCustody ? await readSelfCustody(user, snap.selfCustody) : null,
+    carry: snap.carry ? await readCarry(user, snap.carry) : null,
   };
+}
+
+/** The wallet's carry vault shares, their WETH value and what the contract lets it take out right now. */
+async function readCarry(user: Address, carry: Carry): Promise<CarryPosition> {
+  const v = { address: carry.vault, abi: carryVaultAbi } as const;
+  const [shares, maxRedeem, maxWithdraw, decimals] = await publicClient.multicall({
+    allowFailure: false,
+    contracts: [
+      { ...v, functionName: 'balanceOf', args: [user] },
+      { ...v, functionName: 'maxRedeem', args: [user] },
+      { ...v, functionName: 'maxWithdraw', args: [user] },
+      { ...v, functionName: 'decimals' },
+    ],
+  });
+  const assets = shares > 0n ? await publicClient.readContract({ ...v, functionName: 'convertToAssets', args: [shares] }) : 0n;
+  return { shares, assets, maxRedeem, maxWithdraw, decimals: Number(decimals) };
 }
 
 /** Aqua stores a docked token with this tokens-count marker. */
@@ -307,6 +324,7 @@ const REVERTS: Record<string, (args: readonly unknown[]) => string> = {
   ERC4626ExceededMaxRedeem: () => 'More than can be withdrawn right now. Use Max.',
   ERC4626ExceededMaxDeposit: () => 'Deposits are currently closed.',
   ERC4626ExceededMaxWithdraw: () => 'More than can be withdrawn right now. Use Max.',
+  LtvTooHigh: () => 'That would push the carry vault above its LTV cap. Try a smaller amount.',
   StrategiesMustBeImmutable: () => 'This exact strategy was already shipped. Reload and try again (a new salt is used each time).',
   DockingShouldCloseAllTokens: () => 'Dock must list every token of the strategy. Reload the page and try again.',
   MaxNumberOfTokensExceeded: () => 'Too many markets in one strategy.',

@@ -1,5 +1,6 @@
 import { $, ago, apyPct, esc, num, pct, units, usd } from '../format.ts';
 import { store } from '../store.ts';
+import { carryBest, signedPp, spreadClass } from './carry.ts';
 import { MEASURING, apyBasis, extrapolatedTitle, isExtrapolated, signedHtml, sparkline } from './yield.ts';
 
 interface TileDef {
@@ -187,6 +188,57 @@ export function mountScStats(root: HTMLElement): void {
       sub: line('USDC', sc.markets.filter((m) => m.asset === 'USDC').length, u),
       note: line('WETH', sc.markets.filter((m) => m.asset === 'WETH').length, w),
       title: sc.markets.map((m) => `${m.name} ${m.asset}: ${m.apy === null ? 'measuring…' : pct(m.apy)}`).join(' · '),
+    });
+  });
+}
+
+/** Carry overview: on/off, TVL, the live spread that drives it, LTV, vault APY in ETH terms and the open carry's PnL. */
+export function mountCarryStats(root: HTMLElement): void {
+  const set = tiles(root, [
+    { key: 'status', label: 'Carry', hint: 'ON while USDC is borrowed against the ETH collateral and parked in a sink. OFF: plain ETH collateral, waiting for a spread worth taking.' },
+    { key: 'tvl', label: 'Total value locked', hint: 'ETH collateral plus any carry profit (USDC in sinks minus debt), oracle-priced.' },
+    { key: 'spread', label: 'Live spread', hint: 'Best sink net APY (supply APY + haircut rewards) minus the USDC borrow APR, in percentage points.' },
+    { key: 'ltv', label: 'Loan-to-value', hint: 'USDC debt / ETH collateral value. The contract refuses to borrow past the max; above the deleverage line anyone can force a repay.' },
+    { key: 'apy', label: 'Vault APY', hint: 'Share price growth in ETH terms: Aave collateral yield plus harvested carry profit.' },
+    { key: 'pnl', label: 'Carry PnL', hint: 'USDC held in sinks minus USDC owed. Harvested into ETH by the keeper.' },
+  ]);
+  store.subscribe(({ snapshot }) => {
+    const c = snapshot?.carry;
+    if (!c) return;
+    const on = c.status === 'on';
+    set('status', {
+      value: `<span class="status ${on ? 'is-done' : ''} status-lg">${on ? 'ON' : 'OFF'}</span>`,
+      sub: on ? `borrowing <span class="num">${usd(c.debtUsd, 0)}</span> USDC` : 'waiting for a spread',
+      note: c.decision ? `checked ${ago(Date.now() - c.decision.t * 1000)}` : undefined,
+    });
+    set('tvl', {
+      value: `${num(c.tvlWeth, 4)} <span class="unit">ETH</span>`,
+      sub: `<span class="num">${usd(c.tvlUsd, 0)}</span>${c.harvestedWeth > 0 ? ` · <span class="num">${num(c.harvestedWeth, 4)}</span> ETH harvested` : ''}`,
+    });
+
+    const best = carryBest(c);
+    const r = c.rules;
+    set('spread', {
+      value: best.spread === null ? MEASURING : `<span class="${spreadClass(best.spread, r.enterSpreadPct, r.exitSpreadPct)}">${signedPp(best.spread)}</span>`,
+      sub:
+        best.sink && c.borrowApr !== null
+          ? `${esc(best.sink.name)} <span class="num">${pct(best.sink.netApy!)}</span> − borrow <span class="num">${pct(c.borrowApr)}</span>`
+          : `borrow APR ${c.borrowApr === null ? 'measuring…' : `<span class="num">${pct(c.borrowApr)}</span>`}`,
+      note: `enter ≥ <span class="num">${num(r.enterSpreadPct, 2)}</span> pp · exit &lt; <span class="num">${num(r.exitSpreadPct, 2)}</span> pp`,
+    });
+    set('ltv', {
+      value: pct(c.ltvPct, 1),
+      sub: `target <span class="num">${pct(c.targetLtvPct, 0)}</span> · max <span class="num">${pct(c.maxLtvPct, 0)}</span>`,
+      subClass: c.ltvPct > c.maxLtvPct ? 'warn' : '',
+      note: c.healthFactor === null ? 'no debt · health factor ∞' : `health factor <span class="num">${num(c.healthFactor, 2)}</span>`,
+    });
+    set('apy', {
+      value: c.vaultApy === null ? MEASURING : apyPct(c.vaultApy),
+      sub: 'in ETH terms · share price growth',
+    });
+    set('pnl', {
+      value: `<span class="${c.carryPnlUsd > 0.004 ? 'pos' : c.carryPnlUsd < -0.004 ? 'neg' : ''}">${c.carryPnlUsd > 0.004 ? '+' : ''}${usd(c.carryPnlUsd)}</span>`,
+      sub: `in sinks <span class="num">${usd(c.stableUsd, 0)}</span> − debt <span class="num">${usd(c.debtUsd, 0)}</span>`,
     });
   });
 }

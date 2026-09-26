@@ -101,7 +101,9 @@ export function mountWallet(root: HTMLElement): void {
 
     const price = snapshot.oracle.price;
     const sc = snapshot.selfCustody;
-    const scHold = balances.sc?.holdings ?? [];
+    // The carry vault is also a listed self-custody market; its shares are shown on their own row.
+    const carryVault = snapshot.carry?.vault.toLowerCase();
+    const scHold = (balances.sc?.holdings ?? []).filter((h) => h.address.toLowerCase() !== carryVault);
     const scValue = scHold.reduce((sum, h) => {
       const m = sc?.markets.find((x) => x.address.toLowerCase() === h.address.toLowerCase());
       return sum + (m?.asset === 'WETH' ? units(h.assets, 18) * price : units(h.assets, 6));
@@ -130,6 +132,17 @@ export function mountWallet(root: HTMLElement): void {
           has: p.shares > 0n,
         };
       }),
+      ...(balances.carry
+        ? [
+            {
+              name: 'C · ETH Carry',
+              value: units(balances.carry.assets, 18) * price,
+              detail: tok(balances.carry.assets, 'WETH'),
+              extra: '',
+              has: balances.carry.shares > 0n,
+            },
+          ]
+        : []),
     ];
     $(root, '[data-pos-total]').textContent = usd(rows.reduce((s, r) => s + r.value, 0));
     $(root, '[data-pos-list]').innerHTML = rows

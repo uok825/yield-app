@@ -40,6 +40,18 @@ export interface Balances {
   b: { shares: bigint; stable: bigint; volatile: bigint }[];
   /** Self-custody: holdings in snapshot.selfCustody.markets order, and the wallet's strategies. Null without self-custody. */
   sc: { holdings: ScHolding[]; commits: ScCommit[] } | null;
+  /** Carry vault position (ERC-4626 over WETH). Null without the carry vault. */
+  carry: CarryPosition | null;
+}
+
+export interface CarryPosition {
+  shares: bigint;
+  /** Shares → WETH. */
+  assets: bigint;
+  /** Contract limits: withdrawals are capped by what the collateral can release (profit must be harvested first). */
+  maxRedeem: bigint;
+  maxWithdraw: bigint;
+  decimals: number;
 }
 
 export interface WalletState {
