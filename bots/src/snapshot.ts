@@ -13,6 +13,7 @@ import { type Address, getAddress, parseEventLogs, zeroHash } from 'viem'
 import { erc20Abi, type Context } from './chain.ts'
 import { aaveV3AdapterAbi, aquaYieldAppAbi, chainlinkAggregatorAbi } from './abis.ts'
 import { StrategyRegistry, positions, selfCustodyEnabled } from './wallets.ts'
+import { privateKeyToAccount } from 'viem/accounts'
 import { erc4626Rate, walletMarketName } from './markets.ts'
 import { inventoryVaultAbi, oracleSwapAppAbi, yieldVaultAbi } from './abis.ts'
 import { apyOverWindow, type RateSample } from './allocation.ts'
@@ -406,9 +407,24 @@ export class Snapshotter {
       }),
     )
     const sum = (f: (x: (typeof strategies)[number]) => number) => round2(strategies.reduce((a, x) => a + f(x), 0))
+    const keeperKey = ctx.cfg.keys.keeper
     return {
       app: d.aquaYieldApp,
       resolver: d.walletResolver,
+      aqua: d.aqua,
+      /** Parameters a new wallet strategy should use (what the keeper / resolver bots expect). */
+      defaults: {
+        keeper: process.env.KEEPER_ADDRESS ?? (keeperKey ? privateKeyToAccount(keeperKey).address : null),
+        taker: d.walletResolver,
+        flashFeeBps: d.flashFeeBps,
+        oracle: d.oracle,
+        maxPriceAge: d.mock ? 365 * 24 * 3600 : 3600,
+        spreadBps: d.spreadBps,
+        skewBps: d.skewBps,
+        maxTradeBps: d.maxTradeBps,
+        bandBps: 500,
+        profiles: [7_000, 5_000, 3_000],
+      },
       markets,
       strategies,
       totals: {

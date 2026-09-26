@@ -110,7 +110,7 @@ export function revertReason(err: unknown): string {
 const STALE_READ_RETRIES = 4
 const MAX_SENDS = 4
 const RECEIPT_TIMEOUT_MS = 60_000
-const TRANSIENT = /nonce too low|replacement transaction underpriced|already known|timeout|ECONNRESET|fetch failed|HTTP request failed|rate limit|429|503/i
+const TRANSIENT = /nonce too low|lower than the current nonce|Missing or invalid parameters|replacement transaction underpriced|already known|timeout|ECONNRESET|fetch failed|HTTP request failed|rate limit|429|503/i
 
 /**
  * Simulates, sends and waits for a contract write. Reverts surface as decoded errors before anything is broadcast.
