@@ -354,6 +354,29 @@ a.muted { color: var(--muted); }
 .ratio-legend { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
 
 
+/* ── Strategy B: where the inventory sits ── */
+.alc-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.6fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.alc-body .alc-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.alc-name, .alc-cell, .alc-top, .alc-legend { display: flex; min-width: 0; }
+.alc-name { flex-direction: column; }
+.alc-cell { flex-direction: column; gap: 6px; }
+.alc-top { justify-content: space-between; align-items: baseline; gap: 8px; }
+.alc-top b { font-size: 13px; font-weight: 600; }
+.alc-bar { height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.alc-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.alc-legend { justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.alc-legend small { font-size: 12px; white-space: nowrap; }
+.dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; }
+.dot.is-lent { background: var(--accent); }
+.dot.is-idle { background: var(--border-strong, var(--muted)); }
+
 /* ── Strategy B: yield by profile ────────── */
 .yield-sec { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 .yield-head { margin-bottom: 4px; }
@@ -478,6 +501,8 @@ a.muted { color: var(--muted); }
 }
 
 @media (max-width: 560px) {
+  .alc-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .alc-name { flex-direction: row; justify-content: space-between; align-items: baseline; }
   .topbar-inner { padding: 10px 16px; gap: 8px; flex-wrap: wrap; }
   .block-label { display: none; }
   .live-pill { font-size: 11px; padding: 2px 8px; }

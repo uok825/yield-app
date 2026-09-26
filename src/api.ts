@@ -25,6 +25,17 @@ export interface Performance {
   history: { t: number; sharePrice: number; hodl?: number }[];
 }
 
+/** Where one asset of an inventory vault sits: lent through its adapter, or idle in the vault for fills. */
+export interface Allocation {
+  asset: 'USDC' | 'WETH';
+  market: string | null; // 'Aave V3' | 'Morpho' | 'Fluid' | null when no adapter is set
+  adapter: Address | null;
+  total: bigint;
+  lent: bigint;
+  idle: bigint;
+  apy: number | null;
+}
+
 export interface InventoryVault {
   address: Address;
   name: string;
@@ -41,6 +52,7 @@ export interface InventoryVault {
   skewBps: number;
   spreadIncome: bigint; // USDC units
   swaps: number;
+  allocation: Allocation[];
   performance: Performance | null;
 }
 
@@ -202,6 +214,13 @@ export async function getSnapshot(): Promise<Snapshot> {
         bid: big(v.bid),
         ask: big(v.ask),
         spreadIncome: big(v.spreadIncome),
+        allocation: (v.allocation ?? []).map((a: any) => ({
+          ...a,
+          total: big(a.total),
+          lent: big(a.lent),
+          idle: big(a.idle),
+          apy: n(a.apy),
+        })),
         performance: parsePerf(v.performance),
       })),
     },

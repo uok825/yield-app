@@ -61,6 +61,43 @@ function yieldRow(v: InventoryVault, i: number): string {
     </div>`;
 }
 
+/** One asset's split between its lending market and the idle buffer, with amounts, USD value and APY. */
+function allocCell(v: InventoryVault, a: InventoryVault['allocation'][number], price: number): string {
+  const dec = a.asset === 'USDC' ? 6 : 18;
+  const dp = a.asset === 'USDC' ? 0 : 3;
+  const total = units(a.total, dec);
+  const lent = units(a.lent, dec);
+  const idle = units(a.idle, dec);
+  const toUsd = (x: number) => (a.asset === 'USDC' ? x : x * price);
+  const share = total > 0 ? (lent / total) * 100 : 0;
+  const market = a.market ?? 'not lent';
+  const apy = a.apy == null ? 'measuring…' : pct(a.apy);
+  return `
+    <span role="cell" class="alc-cell" title="${v.symbol} ${a.asset}: ${num(lent, dp)} lent on ${market}, ${num(idle, dp)} idle in the vault for fills">
+      <span class="alc-top"><b>${a.asset}</b><small class="muted num">${num(total, dp)} · ${usd(toUsd(total), 0)}</small></span>
+      <span class="alc-bar" role="img" aria-label="${share.toFixed(0)}% lent on ${market}"><i style="width:${share}%"></i></span>
+      <span class="alc-legend">
+        <small><i class="dot is-lent"></i>${a.market ? `${esc(a.market)} <span class="num">${num(lent, dp)}</span> <span class="muted num">${apy}</span>` : 'No lending market'}</small>
+        <small><i class="dot is-idle"></i>Idle <span class="num">${num(idle, dp)}</span></small>
+      </span>
+    </span>`;
+}
+
+const esc = (x: string) => x.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+
+function allocRow(price: number) {
+  return (v: InventoryVault, i: number) => `
+    <div class="alc-row" role="row">
+      <span role="cell" class="alc-name"><b>${name(v, i)}</b><small class="muted num">${pct(
+        (v.allocation.reduce((sum, a) => sum + (a.asset === 'USDC' ? units(a.lent, 6) : units(a.lent, 18) * price), 0) /
+          Math.max(1, units(v.value, 6))) *
+          100,
+        0,
+      )} lent</small></span>
+      ${v.allocation.map((a) => allocCell(v, a, price)).join('')}
+    </div>`;
+}
+
 export function mountProfiles(root: HTMLElement): void {
   root.innerHTML = `
     <header class="card-head">
@@ -79,6 +116,15 @@ export function mountProfiles(root: HTMLElement): void {
         <span role="columnheader" class="r">Status</span>
       </div>
       <div class="prof-body"></div>
+    </div>
+    <div class="yield-sec">
+      <div class="yield-head">
+        <h3>Where the inventory sits</h3>
+        <p class="muted">Each profile keeps a liquid buffer of both assets for instant fills and lends the rest through one lending market per asset. Morpho and Fluid are used by strategy A.</p>
+      </div>
+      <div class="alc-list" role="table" aria-label="Inventory allocation by profile">
+        <div class="alc-body"></div>
+      </div>
     </div>
     <div class="yield-sec">
       <div class="yield-head">
@@ -101,6 +147,7 @@ export function mountProfiles(root: HTMLElement): void {
   const note = $(root, '[data-note]');
   const ybody = $(root, '.yield-body');
   const basis = $(root, '[data-basis]');
+  const abody = $(root, '.alc-body');
   store.subscribe(({ snapshot }) => {
     if (!snapshot) return;
     const b = snapshot.strategyB;
@@ -109,6 +156,7 @@ export function mountProfiles(root: HTMLElement): void {
     note.textContent = `Each profile is its own pool, quoting the oracle ± ${b.spreadBps} bps with up to ${b.skewBps} bps skew toward its target. A keeper swaps back if the ratio leaves the ±${band}pp band. Idle inventory is lent out (USDC ${lend(b.lendingApy.usdc)} · WETH ${lend(b.lendingApy.weth)} APY).`;
     body.innerHTML = b.vaults.map(row).join('');
     ybody.innerHTML = b.vaults.map(yieldRow).join('');
+    abody.innerHTML = b.vaults.map(allocRow(snapshot.oracle.price)).join('');
     const spans = b.vaults.map((v) => v.performance?.spanSec).filter((x): x is number => x != null);
     const spanSec = spans.length ? Math.max(...spans) : null;
     basis.textContent = `Earned and vs HODL are measured since each profile’s first deposit. Net APY is ${apyBasis(spanSec)}${

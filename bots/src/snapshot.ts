@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { type Address, getAddress, parseEventLogs, zeroHash } from 'viem'
 
 import { erc20Abi, type Context } from './chain.ts'
-import { chainlinkAggregatorAbi } from './abis.ts'
+import { aaveV3AdapterAbi, chainlinkAggregatorAbi } from './abis.ts'
 import { inventoryVaultAbi, oracleSwapAppAbi, yieldVaultAbi } from './abis.ts'
 import { apyOverWindow, type RateSample } from './allocation.ts'
 import { aaveIndex, describeAdapter, type MarketInfo } from './markets.ts'
@@ -40,6 +40,7 @@ const PERF_WINDOW_SEC = Number(process.env.PERF_WINDOW_SEC ?? 86_400)
 const PERF_MIN_SPAN_SEC = Number(process.env.PERF_MIN_SPAN_SEC ?? 600)
 const PERF_KEEP_SEC = 7 * 86_400
 const CHART_POINTS = 60
+const MARKET_NAMES: Record<string, string> = { aave: 'Aave V3', morpho: 'Morpho', fluid: 'Fluid' }
 
 interface Persisted {
   lastBlock: string
@@ -258,6 +259,30 @@ export class Snapshotter {
     }
   }
 
+  private adapterNames = new Map<Address, string>()
+
+  /** Market label for an adapter: 'aave' | 'morpho' | 'fluid' (Aave WETH counts as 'aave'). */
+  private async adapterName(adapter: Address): Promise<string | undefined> {
+    const cached = this.adapterNames.get(adapter)
+    if (cached) return cached
+    const { d } = this.ctx
+    let name: string
+    try {
+      name = (await describeAdapter(this.ctx, adapter)).name
+    } catch {
+      return undefined
+    }
+    if (name.startsWith('0x')) {
+      // describeAdapter labels the Aave WETH pool by address; normalise it.
+      const pool = await this.ctx.client
+        .readContract({ address: adapter, abi: aaveV3AdapterAbi, functionName: 'pool' })
+        .catch(() => undefined)
+      if (pool && d.aaveWethPool && getAddress(pool) === getAddress(d.aaveWethPool)) name = 'aave'
+    }
+    this.adapterNames.set(adapter, name)
+    return name
+  }
+
   private apy(key: string): number | null {
     const samples: RateSample[] = (this.state.samples[key] ?? []).map((s) => ({ t: s.t, index: BigInt(s.index) }))
     const v = apyOverWindow(samples, this.ctx.cfg.keeper.apyWindowSec)
@@ -345,7 +370,22 @@ export class Snapshotter {
           Number(value) / 1e6,
         )
         const perf = perfNow[getAddress(v)]
+        // Where each asset sits: lent through the vault's adapter for that token, or idle in the vault for fills.
+        const allocation = await Promise.all(
+          ([
+            ['USDC', d.usdc, holdings[0], idleS, usdcApy],
+            ['WETH', d.weth, holdings[1], idleV, wethApy],
+          ] as const).map(async ([asset, token, total, idle, apy]) => {
+            const adapter = await read<Address>(v, inventoryVaultAbi, 'adapterOf', [token])
+            if (adapter === ZERO) return { asset, adapter: null, market: null, total, lent: 0n, idle, apy: null }
+            const name = (await this.adapterName(adapter)) ?? ''
+            // Rate of the market this adapter actually uses (Aave WETH has its own series; others share A's).
+            const rate = name === 'aave' ? apy : this.apy(markets.find((m) => m.name === name)?.key ?? '')
+            return { asset, adapter, market: MARKET_NAMES[name] ?? 'Lending', total, lent: total - idle, idle, apy: rate }
+          }),
+        )
         return {
+          allocation,
           performance: perf ? this.performance(getAddress(v), perf, lent, true) : null,
           address: v,
           name,
