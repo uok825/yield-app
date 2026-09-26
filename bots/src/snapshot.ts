@@ -11,16 +11,35 @@ import { join } from 'node:path'
 import { type Address, getAddress, parseEventLogs, zeroHash } from 'viem'
 
 import { erc20Abi, type Context } from './chain.ts'
+import { chainlinkAggregatorAbi } from './abis.ts'
 import { inventoryVaultAbi, oracleSwapAppAbi, yieldVaultAbi } from './abis.ts'
 import { apyOverWindow, type RateSample } from './allocation.ts'
 import { aaveIndex, describeAdapter, type MarketInfo } from './markets.ts'
 import { ethUsd } from './prices.ts'
 import { logger } from './log.ts'
+import {
+  type PerfSample,
+  changePct,
+  windowStart,
+  downsample,
+  hodlPrice,
+  incomeApy,
+  lendingApy,
+  round2,
+  sharePrice as perShare,
+  vsHodlPct,
+} from './yield.ts'
 
 const log = logger('snapshot')
 const ZERO = '0x0000000000000000000000000000000000000000'
 const TTL_MS = Number(process.env.SNAPSHOT_TTL_MS ?? 5_000)
 const SAMPLE_EVERY_SEC = 30
+/** Performance samples (value, shares, holdings, cumulative income) for APY / vs-HODL / share-price charts. */
+const PERF_SAMPLE_SEC = Number(process.env.PERF_SAMPLE_SEC ?? 300)
+const PERF_WINDOW_SEC = Number(process.env.PERF_WINDOW_SEC ?? 86_400)
+const PERF_MIN_SPAN_SEC = Number(process.env.PERF_MIN_SPAN_SEC ?? 600)
+const PERF_KEEP_SEC = 7 * 86_400
+const CHART_POINTS = 60
 
 interface Persisted {
   lastBlock: string
@@ -28,6 +47,8 @@ interface Persisted {
   jitFills: number
   spread: Record<string, { income: string; swaps: number }>
   samples: Record<string, { t: number; index: string }[]>
+  perf?: Record<string, PerfSample[]>
+  inception?: Record<string, PerfSample & { fromDeposit?: boolean }>
 }
 
 export class Snapshotter {
@@ -90,6 +111,7 @@ export class Snapshotter {
     }
 
     const t = Number((await client.getBlock({ blockNumber: head })).timestamp)
+    await this.samplePerformance(t)
     if (t - this.lastSampleT >= SAMPLE_EVERY_SEC) {
       this.lastSampleT = t
       const keep = ctx.cfg.keeper.apyWindowSec * 3
@@ -100,6 +122,140 @@ export class Snapshotter {
       }
     }
     this.save()
+  }
+
+  /** Current performance sample for strategy A ('A') and each inventory vault (by address). */
+  private async perfNow(t: number): Promise<Record<string, PerfSample>> {
+    const { d, client } = this.ctx
+    const { price } = await ethUsd(this.ctx)
+    const read = <T>(address: Address, abi: any, functionName: string) =>
+      client.readContract({ address, abi, functionName } as any) as Promise<T>
+    const out: Record<string, PerfSample> = {}
+    const [tvl, supply] = await Promise.all([
+      read<bigint>(d.vault, yieldVaultAbi, 'totalAssets'),
+      read<bigint>(d.vault, yieldVaultAbi, 'totalSupply'),
+    ])
+    const usd = Number(tvl) / 1e6
+    out.A = { t, value: usd, supply: Number(supply) / 1e12, stable: usd, volatile: 0, income: Number(this.state.jitFees) / 1e6, price }
+    for (const v of d.inventoryVaults ?? []) {
+      const [holdings, value, sup] = await Promise.all([
+        read<readonly [bigint, bigint]>(v, inventoryVaultAbi, 'holdings'),
+        read<bigint>(v, inventoryVaultAbi, 'totalValue'),
+        read<bigint>(v, inventoryVaultAbi, 'totalSupply'),
+      ])
+      out[getAddress(v)] = {
+        t,
+        value: Number(value) / 1e6,
+        supply: Number(sup) / 1e18,
+        stable: Number(holdings[0]) / 1e6,
+        volatile: Number(holdings[1]) / 1e18,
+        income: Number(this.state.spread[getAddress(v)]?.income ?? 0) / 1e6,
+        price,
+      }
+    }
+    return out
+  }
+
+  private backfilled = false
+
+  /**
+   * Anchors each vault's inception at its first on-chain Deposit (basket, shares, oracle price at that block), so
+   * APY and vs-HODL cover the whole history rather than starting when this process first sampled.
+   */
+  private async backfillInception() {
+    if (this.backfilled) return
+    const { d, client, cfg } = this.ctx
+    const inception = (this.state.inception ??= {})
+    const perf = (this.state.perf ??= {})
+    const keys = new Map<string, 'A' | 'B'>([[getAddress(d.vault), 'A']])
+    for (const v of d.inventoryVaults ?? []) keys.set(getAddress(v), 'B')
+    const missing = new Set([...keys.keys()].filter((a) => !inception[keys.get(a) === 'A' ? 'A' : a]?.fromDeposit))
+    if (missing.size === 0) return (this.backfilled = true)
+
+    const head = await client.getBlockNumber()
+    const limit = BigInt(d.deployBlock) + 50_000n
+    for (let from = BigInt(d.deployBlock); from <= head && from <= limit && missing.size > 0; from += cfg.logBlockRange) {
+      const to = from + cfg.logBlockRange - 1n < head ? from + cfg.logBlockRange - 1n : head
+      const logs = await client.getLogs({ address: [...missing] as Address[], fromBlock: from, toBlock: to })
+      const found: { key: string; blockNumber: bigint; make: (price: number) => Omit<PerfSample, 't'> }[] = []
+      for (const ev of parseEventLogs({ abi: yieldVaultAbi, logs, eventName: 'Deposit' })) {
+        if (!missing.has(getAddress(ev.address)) || keys.get(getAddress(ev.address)) !== 'A') continue
+        const value = Number(ev.args.assets) / 1e6
+        found.push({
+          key: getAddress(ev.address),
+          blockNumber: ev.blockNumber,
+          make: (price) => ({ value, supply: Number(ev.args.shares) / 1e12, stable: value, volatile: 0, income: 0, price }),
+        })
+        missing.delete(getAddress(ev.address))
+      }
+      for (const ev of parseEventLogs({ abi: inventoryVaultAbi, logs, eventName: 'Deposit' })) {
+        if (!missing.has(getAddress(ev.address))) continue
+        const stable = Number(ev.args.stableIn) / 1e6
+        const volatile = Number(ev.args.volatileIn) / 1e18
+        found.push({
+          key: getAddress(ev.address),
+          blockNumber: ev.blockNumber,
+          make: (price) => ({ value: stable + volatile * price, supply: Number(ev.args.shares) / 1e18, stable, volatile, income: 0, price }),
+        })
+        missing.delete(getAddress(ev.address))
+      }
+      for (const f of found) {
+        const [block, round] = await Promise.all([
+          client.getBlock({ blockNumber: f.blockNumber }),
+          client.readContract({ address: d.oracle, abi: chainlinkAggregatorAbi, functionName: 'latestRoundData', blockNumber: f.blockNumber }),
+        ])
+        const sample: PerfSample = { t: Number(block.timestamp), ...f.make(Number(round[1]) / 1e8) }
+        const key = keys.get(f.key) === 'A' ? 'A' : f.key
+        inception[key] = { ...sample, fromDeposit: true }
+        perf[key] = [sample, ...(perf[key] ?? []).filter((x) => x.t > sample.t)]
+        log.info('performance anchored at first deposit', { vault: key, block: f.blockNumber })
+      }
+    }
+    this.backfilled = true
+  }
+
+  private async samplePerformance(t: number) {
+    await this.backfillInception()
+    const perf = (this.state.perf ??= {})
+    const inception = (this.state.inception ??= {})
+    const last = perf.A?.[perf.A.length - 1]
+    if (last && t - last.t < PERF_SAMPLE_SEC) return
+    for (const [key, sample] of Object.entries(await this.perfNow(t))) {
+      if (sample.supply <= 0) continue
+      inception[key] ??= sample
+      const list = (perf[key] ??= [])
+      list.push(sample)
+      while (list.length > 2 && t - list[0].t > PERF_KEEP_SEC) list.shift()
+    }
+  }
+
+  /** APY / vs-HODL / share-price metrics for one key, given its current sample and lending APY. */
+  private performance(key: string, now: PerfSample, lending: number | null, isInventory: boolean) {
+    const samples = this.state.perf?.[key] ?? []
+    const inception = this.state.inception?.[key]
+    const income = incomeApy(samples, now, PERF_WINDOW_SEC, PERF_MIN_SPAN_SEC)
+    const start = windowStart(samples, now, PERF_WINDOW_SEC, PERF_MIN_SPAN_SEC)
+    const net = lending === null || income === null ? null : lending + income
+    const series = downsample([...samples.filter((x) => now.t - x.t <= 2 * PERF_WINDOW_SEC), now], CHART_POINTS)
+    return {
+      netApy: round2(net),
+      lendingApy: round2(lending),
+      [isInventory ? 'spreadApy' : 'feeApy']: round2(income),
+      sharePrice: perShare(now),
+      sharePriceChangePct: inception ? round2(changePct(perShare(inception), perShare(now))) : null,
+      vsHodlPct: isInventory && inception ? round2(vsHodlPct(inception, now)) : null,
+      since: inception?.t ?? null,
+      windowSec: PERF_WINDOW_SEC,
+      /** Seconds of history the income APY was annualised from (short spans extrapolate a lot). */
+      spanSec: start ? now.t - start.t : null,
+      /** Income earned since inception, USD. */
+      earnedUsd: inception ? round2(now.income - (inception.income ?? 0)) : null,
+      history: series.map((x) => ({
+        t: x.t,
+        sharePrice: perShare(x),
+        ...(isInventory && inception ? { hodl: hodlPrice(inception, x.price) } : {}),
+      })),
+    }
   }
 
   private apy(key: string): number | null {
@@ -134,7 +290,11 @@ export class Snapshotter {
       read<readonly [readonly Address[], readonly bigint[]]>(d.vault, yieldVaultAbi, 'positions'),
     ])
     const [adapters, assets] = positions
+    const now = Number(block.timestamp)
+    const perfNow = await this.perfNow(now)
+    const aMarkets = adapters.map((a, i) => ({ lentValue: Number(assets[i]) / 1e6, apy: this.apy(getAddress(a)) }))
     const strategyA = {
+      performance: this.performance('A', perfNow.A, lendingApy(aMarkets, Number(tvl) / 1e6), false),
       vault: d.vault,
       tvl,
       idle,
@@ -175,7 +335,18 @@ export class Snapshotter {
           read<bigint>(d.weth, erc20Abi, 'balanceOf', [v]),
         ])
         const spread = this.state.spread[getAddress(v)] ?? { income: '0', swaps: 0 }
+        const usdcApy = aaveUsdc ? this.apy(aaveUsdc.key) : null
+        const wethApy = this.apy('aaveWeth')
+        const lent = lendingApy(
+          [
+            { lentValue: Number(holdings[0] - idleS) / 1e6, apy: usdcApy },
+            { lentValue: (Number(holdings[1] - idleV) / 1e18) * oracle.price, apy: wethApy },
+          ],
+          Number(value) / 1e6,
+        )
+        const perf = perfNow[getAddress(v)]
         return {
+          performance: perf ? this.performance(getAddress(v), perf, lent, true) : null,
           address: v,
           name,
           symbol,
@@ -216,6 +387,7 @@ export class Snapshotter {
       oracle: { price: oracle.price, updatedAt: oracle.updatedAt },
       strategyA,
       strategyB: {
+        performance: aggregate(vaults),
         spreadBps: d.spreadBps,
         skewBps: d.skewBps,
         maxTradeBps: d.maxTradeBps,
@@ -224,6 +396,16 @@ export class Snapshotter {
       },
     }
   }
+}
+
+/** Value-weighted average of the per-profile metrics. */
+function aggregate(vaults: { value: bigint; performance: Record<string, any> | null }[]) {
+  const total = vaults.reduce((sum, v) => sum + Number(v.value), 0)
+  const avg = (key: string) => {
+    if (total <= 0 || vaults.some((v) => v.performance?.[key] == null)) return null
+    return round2(vaults.reduce((sum, v) => sum + (Number(v.value) / total) * v.performance![key], 0))
+  }
+  return { netApy: avg('netApy'), lendingApy: avg('lendingApy'), spreadApy: avg('spreadApy'), vsHodlPct: avg('vsHodlPct') }
 }
 
 export function logSnapshotError(err: unknown) {
