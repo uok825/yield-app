@@ -5,7 +5,7 @@
 import { type Address, type Hex, maxUint256, toHex } from 'viem';
 import { aave4626Abi, aquaAbi, mockERC20Abi } from '../../bots/src/abis.ts';
 import type { ScMarket, ScStrategy, SelfCustody, Snapshot } from '../api.ts';
-import { account, addrUrl, connect, encodeStrategy, ensureAllowance, refreshBalances, switchNetwork, write } from '../chain.ts';
+import { type Step, account, addrUrl, allowance, canBatch, connect, encodeStrategy, ensureAllowance, refreshBalances, switchNetwork, write, writeBatch } from '../chain.ts';
 import { CHAIN_ID, GAS_FAUCET_URL, PROFILE_NAMES } from '../config.ts';
 import { $, esc, num, parseAmount, short, type Token, TOKEN_DEC, TOKEN_DP, toInput, tok, units, usd } from '../format.ts';
 import { type ScCommit, type ScHolding, store } from '../store.ts';
@@ -121,11 +121,11 @@ export function mountScWallet(root: HTMLElement): void {
   const commitForm = $(root, '[data-commit-form]');
   const switchMsg = $(root, '[data-switch-msg]');
   const msg = txStatus($(root, '[data-msg]'));
-  const commitMsg = txStatus($(root, '[data-commit-msg]'), 'One approval per market (skipped if already approved), then one ship. No tokens move.');
+  const commitMsg = txStatus($(root, '[data-commit-msg]'), 'One wallet confirmation if your wallet batches calls (EIP-5792); otherwise one approval per market (skipped if already approved), then one ship. No tokens move.');
   const dockMsgEl = $(root, '[data-dock-msg]');
   const dockMsg = txStatus(dockMsgEl);
   const idleText = () =>
-    mode === 'supply' ? 'Approve once, then deposit. The market mints its shares straight to your wallet.' : 'Redeems your shares on the market itself; the assets come back to your wallet.';
+    mode === 'supply' ? 'Approve and deposit (one confirmation if your wallet batches calls). The market mints its shares straight to your wallet.' : 'Redeems your shares on the market itself; the assets come back to your wallet.';
 
   /* ── Derived data ────────────────────── */
   const sc = () => store.get().snapshot?.selfCustody ?? null;
@@ -441,8 +441,16 @@ export function mountScWallet(root: HTMLElement): void {
       if (mode === 'supply') {
         const assets = amount();
         const token = asset === 'USDC' ? snap.contracts.usdc : snap.contracts.weth;
-        await ensureAllowance(token, m.address, assets, asset, msg.step);
-        const r = await write({ address: m.address, abi: aave4626Abi, functionName: 'deposit', args: [assets, user] }, `Supply to ${m.name}`, msg.step);
+        const deposit: Step = { call: { address: m.address, abi: aave4626Abi, functionName: 'deposit', args: [assets, user] }, label: `Supply to ${m.name}` };
+        let r;
+        if ((await allowance(token, user, m.address)) < assets && (await canBatch())) {
+          // Approve + deposit in one wallet confirmation.
+          const approve: Step = { call: { address: token, abi: mockERC20Abi, functionName: 'approve', args: [m.address, assets] }, label: `Approve ${asset}` };
+          r = await writeBatch([approve, deposit], `Supply to ${m.name}`, msg.step);
+        } else {
+          await ensureAllowance(token, m.address, assets, asset, msg.step);
+          r = await write(deposit.call, deposit.label, msg.step);
+        }
         msg.done(`Supplied ${tok(assets, asset)} to ${m.name} · ${m.symbol} is in your wallet`, r.transactionHash);
       } else {
         const h = holdingOf(m.address);
@@ -477,13 +485,6 @@ export function mountScWallet(root: HTMLElement): void {
       const order: ScMarket[] = shipOrder(s);
       const tokens = order.map((m) => m.address);
       const pending = order.filter((m) => (holdingOf(m.address)?.aquaAllowance ?? 0n) < MAX_ISH);
-      for (const [i, m] of pending.entries()) {
-        await write(
-          { address: m.address, abi: mockERC20Abi, functionName: 'approve', args: [s.aqua, maxUint256] },
-          `Approve ${m.symbol} for Aqua (${i + 1}/${pending.length})`,
-          commitMsg.step,
-        );
-      }
       // Budgets: the current share balance per market, read fresh so the ship matches the wallet.
       await refreshBalances();
       const amounts = order.map((m) => holdingOf(m.address)?.shares ?? 0n);
@@ -504,7 +505,15 @@ export function mountScWallet(root: HTMLElement): void {
         mm: { oracle: d.oracle, maxPriceAge: d.maxPriceAge, spreadBps, skewBps: d.skewBps, maxTradeBps: d.maxTradeBps, targetStableBps, bandBps: d.bandBps },
         salt,
       });
-      const r = await write({ address: s.aqua, abi: aquaAbi, functionName: 'ship', args: [s.app, bytes, tokens, amounts] }, 'Commit (ship)', commitMsg.step);
+      // Every Aqua approval still needed + the ship: one wallet confirmation on EIP-5792 wallets, else one tx each.
+      const steps: Step[] = [
+        ...pending.map((m, i) => ({
+          call: { address: m.address, abi: mockERC20Abi, functionName: 'approve', args: [s.aqua, maxUint256] },
+          label: `Approve ${m.symbol} for Aqua (${i + 1}/${pending.length})`,
+        })),
+        { call: { address: s.aqua, abi: aquaAbi, functionName: 'ship', args: [s.app, bytes, tokens, amounts] }, label: 'Commit (ship)' },
+      ];
+      const r = await writeBatch(steps, 'Commit', commitMsg.step);
       store.update((st) => ({ scLocal: { ...st.scLocal, [hash]: { profileBps: targetStableBps, flashFeeBps, spreadBps, shippedAt: Date.now(), tx: r.transactionHash } } }));
       commitMsg.done('Committed · your shares stay in your wallet', r.transactionHash);
       await settle();

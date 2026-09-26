@@ -293,6 +293,61 @@ export async function write(call: Call, label: string, on: (s: TxStep) => void):
   return receipt;
 }
 
+/* ── Batched calls (EIP-5792) ─────────────── */
+
+let batchSupport: { account: Address; ok: boolean } | null = null;
+
+/** True when the wallet can run several calls atomically behind one confirmation (EIP-5792 `atomic` capability). */
+export async function canBatch(): Promise<boolean> {
+  const from = account();
+  if (batchSupport?.account === from) return batchSupport.ok;
+  let ok = false;
+  try {
+    const caps = (await walletClient!.getCapabilities({ account: from, chainId: CHAIN_ID })) as { atomic?: { status?: string } };
+    ok = caps?.atomic?.status === 'supported' || caps?.atomic?.status === 'ready';
+  } catch {
+    ok = false; // wallet doesn't implement wallet_getCapabilities
+  }
+  batchSupport = { account: from, ok };
+  return ok;
+}
+
+export interface Step {
+  call: Call;
+  label: string;
+}
+
+/**
+ * Sends `steps` in order. With an EIP-5792 wallet they go out as one atomic batch behind a single confirmation
+ * (all or nothing); otherwise one transaction per step, as before. Resolves with the last step's receipt.
+ */
+export async function writeBatch(steps: Step[], label: string, on: (s: TxStep) => void): Promise<TransactionReceipt> {
+  if (steps.length === 1 || !(await canBatch())) {
+    let last: TransactionReceipt | undefined;
+    for (const s of steps) last = await write(s.call, s.label, on);
+    return last!;
+  }
+  const from = account();
+  // Later steps depend on earlier ones (approve → use), so only the first can be simulated up front; the wallet
+  // simulates the whole batch before asking for the confirmation.
+  on({ kind: 'info', label: `${label}: checking…` });
+  await publicClient.simulateContract({ ...steps[0].call, account: from } as never);
+  on({ kind: 'wallet', label: `${label}: confirm ${steps.length} steps in one wallet prompt` });
+  const { id } = await walletClient!.sendCalls({
+    account: from,
+    chain: CHAIN,
+    forceAtomic: true,
+    calls: steps.map(({ call }) => ({ to: call.address, abi: call.abi, functionName: call.functionName, args: call.args })),
+  } as never);
+  on({ kind: 'info', label: `${label}: pending (${steps.length} steps, one batch)` });
+  const res = await walletClient!.waitForCallsStatus({ id, pollingInterval: 1_500, timeout: 180_000 });
+  const receipts = res.receipts ?? [];
+  if (res.status !== 'success' || receipts.length === 0 || receipts.some((r) => r.status !== 'success')) {
+    throw new Error(`${label} failed; nothing was executed (the batch is atomic).`);
+  }
+  return publicClient.waitForTransactionReceipt({ hash: receipts[receipts.length - 1].transactionHash, pollingInterval: 1_500 });
+}
+
 /** Approves `spender` if needed, then waits until the public RPC also reports the new allowance. */
 export async function ensureAllowance(token: Address, spender: Address, amount: bigint, symbol: string, on: (s: TxStep) => void, max = false): Promise<void> {
   const owner = account();
