@@ -1,0 +1,19 @@
+# Frontend
+node_modules
+dist
+dist-ssr
+*.local
+*.log
+
+# Contracts
+contracts/out
+contracts/cache
+contracts/broadcast/*/31337/
+contracts/broadcast/**/dry-run/
+contracts/.env
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
