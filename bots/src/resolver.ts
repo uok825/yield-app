@@ -35,6 +35,8 @@ import { relayerClient } from './relayer-client.ts'
 const log = logger('resolver')
 let swapvmBalances = new Map<string, Promise<bigint>>()
 const MAX_ATTEMPTS = 3
+/** Expected inclusion delay used to estimate auction decay (Base: 2 s blocks). */
+const BLOCK_TIME_SEC = 2n
 
 type Call = { target: Address; value: bigint; data: Hex }
 
@@ -115,8 +117,8 @@ export async function startResolver(ctx: Context, signal: AbortSignal) {
   })
 }
 
-/** Prices every route for `record` at `time` and returns the most profitable one (net of gas), if any. */
-export async function bestRoute(
+/** Prices every route for `record` at `time`, most profitable (net of gas) first. */
+export async function allRoutes(
   ctx: Context,
   record: OrderRecord,
   time: bigint,
@@ -124,10 +126,10 @@ export async function bestRoute(
   ethPrice: number,
   wallets: Shipped[] = [],
   swapvmOrders: ShippedOrder[] = [],
-): Promise<Route | undefined> {
+): Promise<Route[]> {
   const order = decodeOrder(record)
-  if (!order.canExecuteAt(new OneInchAddress(ctx.d.resolver), time)) return undefined
-  if (order.isExpiredAt(time)) return undefined
+  if (!order.canExecuteAt(new OneInchAddress(ctx.d.resolver), time)) return []
+  if (order.isExpiredAt(time)) return []
 
   // Price at the latest block: the most the LOP can ask for until the auction decays further.
   const taking = takingAmountAt(order, ctx.d.resolver, time, baseFee)
@@ -147,9 +149,23 @@ export async function bestRoute(
       swapvmRoute(ctx, oc, ethPrice, o),
     ),
   ])
+  // Routes that buy exactly `taking` of the taker asset (inventory, wallet-mm, swapvm) also keep whatever the LOP
+  // doesn't charge because the auction decays until inclusion; JIT routes already see it inside their simulated
+  // profit. Credit it to the former so the comparison is like for like (on-chain minProfit is unchanged).
+  const decayed = takingAmountAt(order, ctx.d.resolver, time + BLOCK_TIME_SEC, baseFee)
+  const surplus = oc.taking > decayed ? oc.taking - decayed : 0n
+  const surplusUsd = surplus === 0n ? 0 : usdValue(ctx, record.takerAsset, surplus, ethPrice, await decimals(ctx, record.takerAsset))
+  for (const r of candidates) {
+    if (r && /^(inventory|wallet-mm|swapvm)/.test(r.name)) r.profitUsd += surplusUsd
+  }
   const routes = candidates.filter((r): r is Route => !!r && r.profit > 0n)
   routes.sort((a, b) => b.profitUsd - b.gasUsd - (a.profitUsd - a.gasUsd))
-  return routes[0]
+  return routes
+}
+
+/** The most profitable route (net of gas), if any. */
+export async function bestRoute(...args: Parameters<typeof allRoutes>): Promise<Route | undefined> {
+  return (await allRoutes(...args))[0]
 }
 
 /** Gas cost in USD for a simulated call. */
