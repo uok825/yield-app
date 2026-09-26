@@ -16,6 +16,7 @@ import {
   createPublicClient,
   createWalletClient,
   defineChain,
+  fallback,
   http,
 } from 'viem'
 import { nonceManager, privateKeyToAccount } from 'viem/accounts'
@@ -47,7 +48,10 @@ export interface Context {
 
 /** Connects to RPC_URL, detects the chain and loads its deployment file. */
 export async function createContext(cfg: Config = loadConfig()): Promise<Context> {
-  const probe = createPublicClient({ transport: http(cfg.rpcUrl) })
+  // RPC_URL may list several endpoints (comma-separated). viem's fallback transport uses the first healthy one and
+  // fails over on errors — a public endpoint that silently drops transactions should be listed last.
+  const urls = cfg.rpcUrl.split(',').map((u) => u.trim()).filter(Boolean)
+  const probe = createPublicClient({ transport: http(urls[0]) })
   const chainId = await probe.getChainId()
   const chain =
     KNOWN[chainId] ??
@@ -55,9 +59,10 @@ export async function createContext(cfg: Config = loadConfig()): Promise<Context
       id: chainId,
       name: `chain-${chainId}`,
       nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-      rpcUrls: { default: { http: [cfg.rpcUrl] } },
+      rpcUrls: { default: { http: urls } },
     })
-  const transport = http(cfg.rpcUrl, { retryCount: 3, timeout: 20_000 })
+  const transports = urls.map((u) => http(u, { retryCount: 2, timeout: 20_000 }))
+  const transport = transports.length > 1 ? fallback(transports) : transports[0]
   const client = createPublicClient({ chain, transport, pollingInterval: chainId === foundry.id ? 250 : 1_000 })
   const d = loadDeployment(chainId, cfg.deploymentsFile)
   const wallets = new Map<Hex, Wallet>()

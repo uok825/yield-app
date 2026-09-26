@@ -9,6 +9,22 @@ export interface Market {
   apy: number | null;
 }
 
+/** Trailing-window yield metrics computed by the relayer. Any number may be null while it is still measuring. */
+export interface Performance {
+  netApy: number | null; // % — lending + spread/fee
+  lendingApy: number | null; // % — value-weighted, only the lent part earns
+  /** % — spread (B) or JIT fee (A) income over the trailing window, annualised. */
+  incomeApy: number | null;
+  sharePrice: number | null;
+  sharePriceChangePct: number | null; // % since first deposit
+  vsHodlPct: number | null; // % vs holding the inception basket (B only)
+  since: number | null; // unix s, first deposit
+  windowSec: number | null;
+  spanSec: number | null; // seconds of data behind the annualised figures
+  earnedUsd: number | null;
+  history: { t: number; sharePrice: number; hodl?: number }[];
+}
+
 export interface InventoryVault {
   address: Address;
   name: string;
@@ -25,6 +41,7 @@ export interface InventoryVault {
   skewBps: number;
   spreadIncome: bigint; // USDC units
   swaps: number;
+  performance: Performance | null;
 }
 
 export interface Snapshot {
@@ -55,6 +72,7 @@ export interface Snapshot {
     jitFees: bigint;
     jitFills: number;
     markets: Market[];
+    performance: Performance | null;
   };
   strategyB: {
     spreadBps: number;
@@ -62,6 +80,8 @@ export interface Snapshot {
     maxTradeBps: number;
     lendingApy: { usdc: number | null; weth: number | null };
     vaults: InventoryVault[];
+    /** Value-weighted over profiles (no span/history of its own). */
+    performance: Pick<Performance, 'netApy' | 'lendingApy' | 'incomeApy' | 'vsHodlPct'> | null;
   };
 }
 
@@ -112,6 +132,28 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const big = (v: unknown): bigint => BigInt(String(v ?? 0));
+const n = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+function parsePerf(p: any): Performance | null {
+  if (!p || typeof p !== 'object') return null;
+  return {
+    netApy: n(p.netApy),
+    lendingApy: n(p.lendingApy),
+    incomeApy: n(p.spreadApy ?? p.feeApy),
+    sharePrice: n(p.sharePrice),
+    sharePriceChangePct: n(p.sharePriceChangePct),
+    vsHodlPct: n(p.vsHodlPct),
+    since: n(p.since),
+    windowSec: n(p.windowSec),
+    spanSec: n(p.spanSec),
+    earnedUsd: n(p.earnedUsd),
+    history: Array.isArray(p.history)
+      ? p.history
+          .map((h: any) => ({ t: Number(h.t), sharePrice: Number(h.sharePrice), hodl: n(h.hodl) ?? undefined }))
+          .filter((h: { t: number; sharePrice: number }) => Number.isFinite(h.t) && Number.isFinite(h.sharePrice))
+      : [],
+  };
+}
 
 function parseOrder(o: any): OrderRecord {
   return {
@@ -146,9 +188,11 @@ export async function getSnapshot(): Promise<Snapshot> {
       sharePrice: big(a.sharePrice),
       jitFees: big(a.jitFees),
       markets: a.markets.map((m: any) => ({ ...m, assets: big(m.assets) })),
+      performance: parsePerf(a.performance),
     },
     strategyB: {
       ...s.strategyB,
+      performance: parsePerf(s.strategyB.performance),
       vaults: s.strategyB.vaults.map((v: any) => ({
         ...v,
         stable: big(v.stable),
@@ -158,6 +202,7 @@ export async function getSnapshot(): Promise<Snapshot> {
         bid: big(v.bid),
         ask: big(v.ask),
         spreadIncome: big(v.spreadIncome),
+        performance: parsePerf(v.performance),
       })),
     },
   };

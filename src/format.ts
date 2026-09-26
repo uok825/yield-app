@@ -59,3 +59,22 @@ export function $<T extends Element = HTMLElement>(root: ParentNode, sel: string
   if (!el) throw new Error(`Missing element: ${sel}`);
   return el;
 }
+
+/** Signed percentage with a true minus sign: "+0.08%", "−0.05%", "0.00%". */
+export function signedPct(v: number, dp = 2): string {
+  const r = Number(v.toFixed(dp));
+  return (r > 0 ? '+' : r < 0 ? '−' : '') + pct(Math.abs(v), dp);
+}
+
+/** APY with precision scaled to magnitude, so "528%" doesn't read as more exact than it is. */
+export const apyPct = (v: number) => pct(v, Math.abs(v) >= 100 ? 0 : Math.abs(v) >= 10 ? 1 : 2);
+
+/** Duration: "45m", "1h 23m", "3d 4h". */
+export function span(sec: number): string {
+  const m = Math.max(0, Math.floor(sec / 60));
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return h % 24 ? `${d}d ${h % 24}h` : `${d}d`;
+}

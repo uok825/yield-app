@@ -220,6 +220,36 @@ a.muted { color: var(--muted); }
 .stat-value { font-size: 24px; font-weight: 500; margin: 6px 0 2px; white-space: nowrap; }
 .stat-sub { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .stat-sub.warn { color: var(--warn); }
+.stat-main { display: flex; align-items: center; gap: 12px; min-width: 0; margin: 6px 0 2px; }
+.stat-main .stat-value { margin: 0; min-width: 0; }
+.stat-aside { flex: 1 1 0; min-width: 40px; max-width: 120px; margin-left: auto; }
+.stat-aside .spark { height: 26px; }
+.stat-note { font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat[title], .stat-label[title] { cursor: help; }
+.stat-value .measuring { font-size: 15px; }
+.tag {
+  display: inline-block;
+  vertical-align: 5px;
+  margin-left: 4px;
+  padding: 0 6px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  font: 400 10px/16px var(--font);
+  letter-spacing: 0;
+  color: var(--muted);
+  cursor: help;
+}
+.extrap { text-decoration: underline dotted color-mix(in srgb, var(--muted) 70%, transparent); text-underline-offset: 3px; cursor: help; }
+
+/* ── Sparklines ──────────────────────────── */
+.spark { display: block; width: 100%; height: 28px; overflow: visible; }
+.spark polyline { fill: none; stroke-width: 1.5; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.spark-share { stroke: var(--accent); }
+.spark-hodl { stroke: var(--muted); stroke-dasharray: 3 3; }
+.spark-empty { display: block; height: auto; font-size: 11px; }
+.spark-legend { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; font-size: 11px; }
+.spark-legend i { display: inline-block; width: 12px; height: 0; border-top: 1.5px solid var(--accent); }
+.spark-legend i.lg-hodl { margin-left: 6px; border-top: 1.5px dashed var(--muted); }
 
 .grid {
   display: grid;
@@ -302,7 +332,7 @@ a.muted { color: var(--muted); }
 /* ── Strategy B: profiles ────────────────── */
 .prof-row {
   display: grid;
-  grid-template-columns: minmax(84px, 0.7fr) minmax(110px, 1.5fr) 96px 44px 84px 84px 92px;
+  grid-template-columns: minmax(84px, 0.7fr) minmax(110px, 1.5fr) 96px 44px 84px 92px;
   align-items: center;
   gap: 12px;
   padding: 12px 0;
@@ -312,7 +342,7 @@ a.muted { color: var(--muted); }
 .prof-body .prof-row:last-child { border-bottom: 0; padding-bottom: 0; }
 .prof-name { min-width: 0; }
 .prof-name a { color: var(--text); }
-.prof-quote small, .prof-income small { font-size: 12px; white-space: nowrap; }
+.prof-quote small { font-size: 12px; white-space: nowrap; }
 .prof-skew { font-size: 13px; }
 
 .ratio { position: relative; display: block; height: 6px; margin: 6px 0; border-radius: 3px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
@@ -323,6 +353,30 @@ a.muted { color: var(--muted); }
 .ratio.is-out .ratio-mark { background: var(--neg); }
 .ratio-legend { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; }
 
+
+/* ── Strategy B: yield by profile ────────── */
+.yield-sec { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.yield-head { margin-bottom: 4px; }
+.yield-head h3 { color: var(--text); font-size: 14px; font-weight: 600; }
+.yield-head p { font-size: 12px; margin-top: 2px; cursor: help; }
+.yield-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.7fr) minmax(88px, 1.6fr) 72px 88px minmax(150px, 1fr);
+  align-items: center;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.yield-headrow { font-size: 12px; color: var(--muted); padding: 8px 0; }
+.yield-body .yield-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.y-name { min-width: 0; }
+.y-name b { display: block; }
+.y-name small, .y-earned small, .y-apy small { font-size: 11px; white-space: nowrap; }
+.y-hodl, .y-earned, .y-apy { font-size: 13px; }
+.y-apy > .num { font-size: 13px; }
+.y-break { display: flex; flex-wrap: wrap; justify-content: flex-end; column-gap: 4px; }
+.y-break > span { white-space: nowrap; }
+.stat-sub .num, .stat-note .num { margin: 0 1px; }
 
 /* ── Deposit card ────────────────────────── */
 .tabs { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; background: var(--surface-2); border-radius: 8px; margin-bottom: 20px; }
@@ -411,6 +465,12 @@ a.muted { color: var(--muted); }
   .o-fills { order: 5; }
 }
 
+/* Two columns but a narrow main column: tighten the profile tables so they don't overflow. */
+@media (min-width: 961px) and (max-width: 1120px) {
+  .prof-row { grid-template-columns: minmax(72px, 0.7fr) minmax(84px, 1.5fr) 92px 32px 76px 80px; gap: 8px; }
+  .yield-row { grid-template-columns: minmax(64px, 0.7fr) minmax(60px, 1.6fr) 64px 80px minmax(140px, 1fr); gap: 10px; }
+}
+
 @media (max-width: 720px) {
   .stats { grid-template-columns: 1fr 1fr; }
   .stat:nth-child(3) { border-left: 0; }
@@ -450,8 +510,24 @@ a.muted { color: var(--muted); }
   .switch-opt b { font-size: 13px; }
   .sm-only { display: inline; margin-right: 4px; }
   .prof-headrow { display: none; }
-  .prof-row { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: 'name tvl status' 'ratio ratio ratio' 'quote quote quote' 'income income skew'; row-gap: 6px; }
-  .prof-income { grid-area: income; justify-self: start; display: flex; gap: 6px; align-items: baseline; font-size: 12px; }
+  .prof-row { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: 'name tvl status' 'ratio ratio ratio' 'quote quote skew'; row-gap: 6px; }
+  .yield-headrow { display: none; }
+  .yield-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+    grid-template-areas: 'name name trend' 'hodl earned apy';
+    align-items: start;
+    gap: 8px 12px;
+  }
+  .y-name { grid-area: name; display: flex; align-items: baseline; gap: 8px; }
+  .y-name b { display: inline; }
+  .y-trend { grid-area: trend; align-self: center; }
+  .y-name { align-self: center; }
+  .y-hodl { grid-area: hodl; justify-self: start; text-align: left; }
+  .y-earned { grid-area: earned; justify-self: start; text-align: left; }
+  .y-apy { grid-area: apy; justify-self: end; }
+  .y-hodl .sm-only, .y-earned .sm-only, .y-apy .sm-only { display: block; margin: 0; font-size: 11px; }
+  .stat-aside { max-width: 64px; }
+  .stat-note { white-space: normal; }
   .prof-name { grid-area: name; white-space: nowrap; }
   .prof-ratio { grid-area: ratio; }
   .prof-skew { grid-area: skew; font-size: 12px; }

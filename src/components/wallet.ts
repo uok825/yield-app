@@ -5,6 +5,7 @@ import { CHAIN_ID, FAUCET, GAS_FAUCET_URL, PROFILE_NAMES } from '../config.ts';
 import { $, num, short, tok, units, usd } from '../format.ts';
 import { store } from '../store.ts';
 import { txStatus } from './tx.ts';
+import { signedHtml } from './yield.ts';
 
 const LOW_GAS = parseEther('0.0005');
 
@@ -100,18 +101,22 @@ export function mountWallet(root: HTMLElement): void {
 
     const price = snapshot.oracle.price;
     const rows = [
-      { name: 'A · Yield + JIT', value: units(balances.a.assets, 6), detail: `${num(units(balances.a.shares, 12), 2)} ysUSDC`, has: balances.a.shares > 0n },
-      ...balances.b.map((p, i) => ({
-        name: `B · ${PROFILE_NAMES[i]}`,
-        value: units(p.stable, 6) + units(p.volatile, 18) * price,
-        detail: `${tok(p.stable, 'USDC')} + ${tok(p.volatile, 'WETH')}`,
-        has: p.shares > 0n,
-      })),
+      { name: 'A · Yield + JIT', value: units(balances.a.assets, 6), detail: `${num(units(balances.a.shares, 12), 2)} ysUSDC`, extra: '', has: balances.a.shares > 0n },
+      ...balances.b.map((p, i) => {
+        const hodl = snapshot.strategyB.vaults[i]?.performance?.vsHodlPct ?? null;
+        return {
+          name: `B · ${PROFILE_NAMES[i]}`,
+          value: units(p.stable, 6) + units(p.volatile, 18) * price,
+          detail: `${tok(p.stable, 'USDC')} + ${tok(p.volatile, 'WETH')}`,
+          extra: hodl === null ? '' : `<small class="muted" title="This profile’s share value vs holding the same USDC/WETH basket since launch">${signedHtml(hodl)} vs HODL</small>`,
+          has: p.shares > 0n,
+        };
+      }),
     ];
     $(root, '[data-pos-total]').textContent = usd(rows.reduce((s, r) => s + r.value, 0));
     $(root, '[data-pos-list]').innerHTML = rows
       .map(
-        (r) => `<li class="${r.has ? '' : 'is-empty'}"><span>${r.name}</span><span class="r">${r.has ? `<span class="num">${usd(r.value)}</span><small class="muted num">${r.detail}</small>` : '<span class="muted">—</span>'}</span></li>`,
+        (r) => `<li class="${r.has ? '' : 'is-empty'}"><span>${r.name}</span><span class="r">${r.has ? `<span class="num">${usd(r.value)}</span><small class="muted num">${r.detail}</small>${r.extra}` : '<span class="muted">—</span>'}</span></li>`,
       )
       .join('');
   });

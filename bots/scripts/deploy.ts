@@ -26,10 +26,11 @@ const env = {
   KEEPER: privateKeyToAccount(need('KEEPER_PRIVATE_KEY') as Hex).address,
   OPERATOR: privateKeyToAccount(need('OPERATOR_PRIVATE_KEY') as Hex).address,
 }
-console.log(`deployer ${privateKeyToAccount(deployer).address} → ${need('RPC_URL')}`)
+const rpc = need('RPC_URL').split(',')[0].trim() // forge takes one endpoint; use the preferred one
+console.log(`deployer ${privateKeyToAccount(deployer).address} → ${rpc}`)
 const res = spawnSync(
   forge,
-  ['script', 'script/Deploy.s.sol', '--rpc-url', need('RPC_URL'), '--private-key', deployer, '--broadcast', '--slow', ...process.argv.slice(2)],
+  ['script', 'script/Deploy.s.sol', '--rpc-url', rpc, '--private-key', deployer, '--broadcast', '--slow', ...process.argv.slice(2)],
   { cwd: join(here, '../../contracts'), env, stdio: 'inherit' },
 )
 process.exit(res.status ?? 1)
