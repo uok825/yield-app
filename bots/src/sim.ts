@@ -3,11 +3,13 @@
  *   - MockOracle mirrors Chainlink ETH/USD on Base mainnet (PRICE_SOURCE_RPC_URL), or a bounded random walk
  *   - MockSwapRouter quotes USDC⇄WETH at oracle ± SIM_ROUTER_SPREAD_BPS
  *   - Mock lending markets accrue interest at drifting APYs (SIM_MARKET_APYS, SIM_TIME_SCALE)
+ *   - The carry credit market's USDC borrow APR drifts around SIM_CARRY_BORROW_APR (so carry turns on and off);
+ *     debt accrues at that rate and WETH collateral earns the aaveWeth APY
  */
 import { type Address, createPublicClient, formatUnits, http } from 'viem'
 import { base } from 'viem/chains'
 
-import { chainlinkAggregatorAbi, mockAavePoolAbi, mockLendingVaultAbi, mockOracleAbi, mockSwapRouterAbi } from './abis.ts'
+import { chainlinkAggregatorAbi, mockAavePoolAbi, mockCreditMarketAbi, mockLendingVaultAbi, mockOracleAbi, mockSwapRouterAbi } from './abis.ts'
 import { type Context, write } from './chain.ts'
 import { logger } from './log.ts'
 import { count, runEvery } from './loop.ts'
@@ -52,6 +54,9 @@ export async function startSim(ctx: Context, signal: AbortSignal) {
   )
     .filter(([, address]) => address && address !== ZERO)
     .map(([name, address, kind]) => ({ name, address, kind, apy: apys[name] ?? 4, base: apys[name] ?? 4, pendingWad: 0n }))
+
+  const credit = d.creditMarket && d.creditMarket !== ZERO ? d.creditMarket : undefined
+  const borrow = { apr: cfg.sim.carryBorrowApr, pendingWad: 0n, supplyWad: 0n }
 
   let lastT = Number((await ctx.client.getBlock()).timestamp)
   log.info('starting', {
@@ -114,10 +119,29 @@ export async function startSim(ctx: Context, signal: AbortSignal) {
         await write(ctx, deployer, { address: m.address, abi: mockAavePoolAbi, functionName: 'accrueWad', args: [rateWad] }, `${m.name}.accrue`)
       }
     }
+    // ─── Carry credit market ─────────────────────────────────────────────
+    if (credit) {
+      const base = cfg.sim.carryBorrowApr
+      borrow.apr = Math.min(12, Math.max(1, borrow.apr + (Math.random() - 0.5) * 0.6 + (base - borrow.apr) * 0.05))
+      const ray = BigInt(Math.round(borrow.apr * 1e6)) * 10n ** 19n // % → ray APR
+      await write(ctx, deployer, { address: credit, abi: mockCreditMarketAbi, functionName: 'setBorrowRate', args: [d.usdc, ray] }, 'credit.setBorrowRate')
+      const scale = (dt / YEAR) * cfg.sim.timeScale
+      borrow.pendingWad += BigInt(Math.round((borrow.apr / 100) * scale * 1e18))
+      borrow.supplyWad += BigInt(Math.round(((apys.aaveWeth ?? 2) / 100) * scale * 1e18))
+      if (borrow.pendingWad >= 10n ** 10n) {
+        await write(ctx, deployer, { address: credit, abi: mockCreditMarketAbi, functionName: 'accrueDebtWad', args: [d.usdc, borrow.pendingWad] }, 'credit.accrueDebt')
+        borrow.pendingWad = 0n
+      }
+      if (borrow.supplyWad >= 10n ** 10n) {
+        await write(ctx, deployer, { address: credit, abi: mockCreditMarketAbi, functionName: 'accrueSupplyWad', args: [d.weth, borrow.supplyWad] }, 'credit.accrueSupply')
+        borrow.supplyWad = 0n
+      }
+    }
     count('sim', 'ticks')
     log.info('tick', {
       eth: `$${Number(formatUnits(next, 8)).toFixed(2)}`,
       apys: markets.map((m) => `${m.name}:${m.apy.toFixed(2)}%`).join(' '),
+      ...(credit ? { borrowApr: `${borrow.apr.toFixed(2)}%` } : {}),
     })
   })
 }

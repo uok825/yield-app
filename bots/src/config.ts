@@ -40,6 +40,11 @@ export interface Deployment {
   walletResolver?: Address
   walletStableMarkets?: Address[]
   walletVolatileMarkets?: Address[]
+  // Carry module (DeployCarry.s.sol)
+  carryVault?: Address
+  carrySinks?: Address[]
+  creditMarket?: Address // mock deployments only
+  carryAaveOracle?: Address
 }
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -131,6 +136,28 @@ export function loadConfig() {
       maxSwapSlippageBps: num('KEEPER_MAX_SWAP_SLIPPAGE_BPS', 30),
       trustScores: JSON.parse(env('KEEPER_TRUST_SCORES', '{}')) as Record<string, number>,
     },
+    carry: {
+      /** Borrow up to this LTV when carry is on (the vault's hard limit is maxLtvBps, e.g. 3000). */
+      targetLtvBps: num('CARRY_TARGET_LTV_BPS', 2_500),
+      /** Open only if (sink APY − borrow APR) ≥ this (pp)… */
+      enterSpreadPct: num('CARRY_ENTER_SPREAD_PCT', 0.3),
+      /** …and close once it stays below this for `exitConfirmations` ticks (hysteresis). */
+      exitSpreadPct: num('CARRY_EXIT_SPREAD_PCT', 0.05),
+      exitConfirmations: num('CARRY_EXIT_CONFIRMATIONS', 3),
+      /** Expected profit over this horizon must cover (entry + exit gas) × costMultiple. */
+      horizonHours: num('CARRY_HORIZON_HOURS', 24),
+      costMultiple: num('CARRY_COST_MULTIPLE', 3),
+      /** Never be more than this share of a sink's assets (our own rate impact stays small). */
+      maxSinkShareBps: num('CARRY_MAX_SINK_SHARE_BPS', 500),
+      rotateGainPct: num('CARRY_ROTATE_GAIN_PCT', 0.25),
+      minMoveUsd: num('CARRY_MIN_MOVE_USD', 50),
+      harvestMinUsd: num('CARRY_HARVEST_MIN_USD', 20),
+      /** Extra APR from sink incentives (e.g. {"0xsink": 2.77}), counted at `rewardHaircut`. */
+      sinkRewardApr: JSON.parse(env('CARRY_SINK_REWARD_APR', '{}')) as Record<string, number>,
+      rewardHaircut: num('CARRY_REWARD_HAIRCUT', 0.5),
+      /** L1 data fee (USD) added to the open + close gas cost on an OP-stack chain. */
+      l1FeeUsd: num('CARRY_L1_FEE_USD', 0.02),
+    },
     maker: {
       intervalMs: num('MAKER_INTERVAL_MS', 15_000),
       minUsd: num('MAKER_ORDER_MIN_USD', 200),
@@ -146,6 +173,7 @@ export function loadConfig() {
       /** Simulated DEX cost (pool fee + price impact) on each side of the mock router. */
       routerSpreadBps: num('SIM_ROUTER_SPREAD_BPS', 10),
       timeScale: num('SIM_TIME_SCALE', 1),
+      carryBorrowApr: num('SIM_CARRY_BORROW_APR', 4.8),
       marketApys: JSON.parse(env('SIM_MARKET_APYS', '{"morpho":6.5,"aave":4.2,"fluid":5.4,"aaveWeth":2.1}')) as Record<
         string,
         number

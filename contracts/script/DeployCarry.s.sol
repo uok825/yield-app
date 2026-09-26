@@ -82,6 +82,16 @@ contract DeployCarry is Script {
         vm.writeJson(_q(l.market), path, ".creditMarket");
         vm.writeJson(_q(l.oracle), path, ".carryAaveOracle");
         vm.writeJson(_array(l.sinks), path, ".carrySinks");
+        // Self-custody: new strategies may list the CarryVault as a WETH market (keeper routes ETH into carry).
+        if (vm.keyExistsJson(json, ".walletVolatileMarkets")) {
+            address[] memory vol = vm.parseJsonAddressArray(json, ".walletVolatileMarkets");
+            address[] memory next = new address[](vol.length + 1);
+            for (uint256 i; i < vol.length; ++i) {
+                next[i] = vol[i];
+            }
+            next[vol.length] = address(carry);
+            vm.writeJson(_array(next), path, ".walletVolatileMarkets");
+        }
     }
 
     function _mockLegs(string memory json, address usdc, address weth) internal returns (Legs memory l) {

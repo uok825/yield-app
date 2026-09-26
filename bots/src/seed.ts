@@ -4,12 +4,13 @@
  *               the keeper can measure APYs before we allocate anything
  *   Strategy A: SEED_A_USD into the YieldVault (deployer acts as the first LP)
  *   Strategy B: SEED_B_USD into each InventoryVault at its target split
+ *   Carry:      USDC lending depth in the mock credit market, SEED_CARRY_ETH of WETH into the CarryVault
  * Idempotent: vaults that already hold liquidity are skipped.
  */
 import { type Address, type Hex, maxUint256, parseEther, parseUnits, toHex, zeroHash } from 'viem'
 import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts'
 
-import { aquaAbi, aave4626Abi, inventoryVaultAbi, mockAavePoolAbi, mockERC20Abi, mockLendingVaultAbi, yieldVaultAbi } from './abis.ts'
+import { aquaAbi, aave4626Abi, carryVaultAbi, mockCreditMarketAbi, inventoryVaultAbi, mockAavePoolAbi, mockERC20Abi, mockLendingVaultAbi, yieldVaultAbi } from './abis.ts'
 import { assertCleanWallets } from './maker.ts'
 import { StrategyRegistry, encodeStrategy, selfCustodyEnabled, type WalletStrategy } from './wallets.ts'
 import { type Context, erc20Abi, write } from './chain.ts'
@@ -19,7 +20,36 @@ const log = logger('seed')
 
 export async function seed(ctx: Context) {
   await seedVaults(ctx)
+  await seedCarry(ctx)
   await seedWallets(ctx)
+}
+
+async function seedCarry(ctx: Context) {
+  const { d, client } = ctx
+  const ZERO = '0x0000000000000000000000000000000000000000'
+  if (!d.carryVault || d.carryVault === ZERO || !d.creditMarket || d.creditMarket === ZERO) return
+  const w = ctx.wallet('deployer')
+  const me = w.account.address
+  const approve = async (token: Address, spender: Address) => {
+    const allowance = await client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [me, spender] })
+    if (allowance < maxUint256 / 2n) await write(ctx, w, { address: token, abi: erc20Abi, functionName: 'approve', args: [spender, maxUint256] })
+  }
+  // Other lenders' USDC, so the vault can borrow.
+  const aUsdc = await client.readContract({ address: d.creditMarket, abi: mockCreditMarketAbi, functionName: 'aTokenOf', args: [d.usdc] })
+  const depth = parseUnits(process.env.SEED_CREDIT_USD ?? '2000000', 6)
+  if ((await client.readContract({ address: d.usdc, abi: erc20Abi, functionName: 'balanceOf', args: [aUsdc] })) < depth / 2n) {
+    await write(ctx, w, { address: d.usdc, abi: mockERC20Abi, functionName: 'mint', args: [me, depth] })
+    await approve(d.usdc, d.creditMarket)
+    await write(ctx, w, { address: d.creditMarket, abi: mockCreditMarketAbi, functionName: 'supply', args: [d.usdc, depth, me, 0] })
+    log.info('seeded credit market', { usd: Number(depth / 10n ** 6n) })
+  }
+  if ((await client.readContract({ address: d.carryVault, abi: carryVaultAbi, functionName: 'totalSupply' })) === 0n) {
+    const amount = parseEther(process.env.SEED_CARRY_ETH ?? '20')
+    await write(ctx, w, { address: d.weth, abi: mockERC20Abi, functionName: 'mint', args: [me, amount] })
+    await approve(d.weth, d.carryVault)
+    await write(ctx, w, { address: d.carryVault, abi: carryVaultAbi, functionName: 'deposit', args: [amount, me] })
+    log.info('seeded carry vault', { weth: Number(amount / 10n ** 18n) })
+  }
 }
 
 async function seedVaults(ctx: Context) {
@@ -87,12 +117,13 @@ async function seedVaults(ctx: Context) {
 /**
  * Self-custody LPs (mock deployments): wallets that supply to lending markets themselves, keep the ERC-4626 shares,
  * approve Aqua and ship one AquaYieldApp strategy (keeper rebalancing + JIT + market making).
- * Keys derive from MAKER_MNEMONIC at index MAKER_INDEX_OFFSET + 100 + i.
+ * Keys derive from MAKER_MNEMONIC at index MAKER_INDEX_OFFSET + 100 + i. LPs shipped after the carry module was
+ * deployed also list the CarryVault as a WETH market, so the keeper can route their ETH into carry when it pays.
  */
 export function walletLps(ctx: Context) {
   const mnemonic = ctx.cfg.makerMnemonic
   if (!mnemonic) throw new Error('MAKER_MNEMONIC is required to seed self-custody LPs')
-  const count = Number(process.env.WALLET_LP_COUNT ?? 2)
+  const count = Number(process.env.WALLET_LP_COUNT ?? 3)
   return Array.from({ length: count }, (_, i) => {
     const key = toHex(mnemonicToAccount(mnemonic, { addressIndex: ctx.cfg.makerIndexOffset + 100 + i }).getHdKey().privateKey!)
     return { index: i, key: key as Hex, address: privateKeyToAccount(key as Hex).address }

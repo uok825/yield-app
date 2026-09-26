@@ -62,9 +62,13 @@ export function aaveIndex(ctx: Context, pool: Address, asset: Address): RateSour
  * price is flat until someone deposits); other markets are probed via their share price with 1e18 precision.
  */
 export async function erc4626Rate(ctx: Context, market: Address): Promise<RateSource> {
-  const pool = await ctx.client
-    .readContract({ address: market, abi: aave4626Abi, functionName: 'POOL' })
+  // Aave-4626 wrappers expose A_TOKEN (CarryVault has POOL too, but its share price is the right measure).
+  const aToken = await ctx.client
+    .readContract({ address: market, abi: aave4626Abi, functionName: 'A_TOKEN' })
     .catch(() => undefined)
+  const pool = aToken
+    ? await ctx.client.readContract({ address: market, abi: aave4626Abi, functionName: 'POOL' })
+    : undefined
   if (pool) {
     const asset = await ctx.client.readContract({ address: market, abi: aave4626Abi, functionName: 'asset' })
     return aaveIndex(ctx, pool, asset)
@@ -78,6 +82,7 @@ export async function erc4626Rate(ctx: Context, market: Address): Promise<RateSo
 /** Trust-score key for a self-custody market: the deployment's Morpho / Fluid markets, otherwise an Aave-4626 wrapper. */
 export function walletMarketName(ctx: Context, market: Address): string {
   const m = market.toLowerCase()
+  if (m === ctx.d.carryVault?.toLowerCase()) return 'carry'
   if (m === ctx.d.morphoMarket?.toLowerCase()) return 'morpho'
   if (m === ctx.d.fluidMarket?.toLowerCase()) return 'fluid'
   return 'aave'

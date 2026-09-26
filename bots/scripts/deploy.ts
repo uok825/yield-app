@@ -1,7 +1,8 @@
 /**
  * Deploys the contracts with the keys from bots/.env, so the private key never goes through your shell history:
- *   npm run deploy                 (RPC_URL from .env, e.g. Base Sepolia) — Deploy.s.sol, then DeployWallet.s.sol
+ *   npm run deploy                 (RPC_URL from .env, e.g. Base Sepolia) — Deploy, DeployWallet, DeployCarry
  *   npm run deploy -- wallet       only DeployWallet.s.sol (add self-custody mode to an existing deployment)
+ *   npm run deploy -- carry        only DeployCarry.s.sol (add the conditional carry module)
  * Keeper / operator roles are set to the addresses of KEEPER_PRIVATE_KEY / OPERATOR_PRIVATE_KEY.
  */
 import '../src/env.ts'
@@ -30,7 +31,8 @@ const env = {
 const rpc = need('RPC_URL').split(',')[0].trim() // forge takes one endpoint; use the preferred one
 console.log(`deployer ${privateKeyToAccount(deployer).address} → ${rpc}`)
 const only = process.argv[2]
-const scripts = only === 'wallet' ? ['DeployWallet.s.sol'] : ['Deploy.s.sol', 'DeployWallet.s.sol']
+const scripts =
+  only === 'wallet' ? ['DeployWallet.s.sol'] : only === 'carry' ? ['DeployCarry.s.sol'] : ['Deploy.s.sol', 'DeployWallet.s.sol', 'DeployCarry.s.sol']
 for (const script of scripts) {
   console.log(`\n▶ ${script}`)
   const res = spawnSync(

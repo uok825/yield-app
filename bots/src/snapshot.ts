@@ -19,6 +19,8 @@ import { inventoryVaultAbi, oracleSwapAppAbi, yieldVaultAbi } from './abis.ts'
 import { apyOverWindow, type RateSample } from './allocation.ts'
 import { aaveIndex, describeAdapter, type MarketInfo } from './markets.ts'
 import { ethUsd } from './prices.ts'
+import { borrowApr, carryEnabled, lastDecision, readCarry } from './carry.ts'
+import { carryVaultAbi } from './abis.ts'
 import { logger } from './log.ts'
 import {
   type PerfSample,
@@ -58,6 +60,8 @@ interface Persisted {
     { jitFees: Record<string, string>; flashes: number; spreadUsd: number; swaps: number; rebalances: number; lastRebalance?: number }
   >
   inception?: Record<string, PerfSample & { fromDeposit?: boolean }>
+  /** CarryVault activity from its events. */
+  carry?: { counts: Record<string, number>; harvestedWeth: string; events: { block: string; tx: string; kind: string; detail: Record<string, string> }[] }
 }
 
 export class Snapshotter {
@@ -101,7 +105,12 @@ export class Snapshotter {
     const head = await client.getBlockNumber()
     let from = BigInt(this.state.lastBlock) + 1n
     if (from === 1n) from = BigInt(d.deployBlock || Number(head))
-    const vaults = [d.vault, ...(d.inventoryVaults ?? []), ...(selfCustodyEnabled(ctx) ? [d.aquaYieldApp!] : [])].filter(
+    const vaults = [
+      d.vault,
+      ...(d.inventoryVaults ?? []),
+      ...(selfCustodyEnabled(ctx) ? [d.aquaYieldApp!] : []),
+      ...(carryEnabled(ctx) ? [d.carryVault!] : []),
+    ].filter(
       (a) => a && a !== ZERO,
     )
     while (from <= head) {
@@ -112,6 +121,7 @@ export class Snapshotter {
         this.state.jitFills++
       }
       if (selfCustodyEnabled(ctx)) await this.foldWalletEvents(logs)
+      if (carryEnabled(ctx)) this.foldCarryEvents(logs)
       for (const ev of parseEventLogs({ abi: inventoryVaultAbi, logs, eventName: 'SwapSettled' })) {
         const key = getAddress(ev.address)
         const s = (this.state.spread[key] ??= { income: '0', swaps: 0 })
@@ -132,6 +142,15 @@ export class Snapshotter {
         const list = (this.state.samples[`w:${m}`] ??= [])
         list.push({ t, index: (await this.walletRates.get(m)!()).toString() })
         while (list.length > 2 && t - list[1].t >= ctx.cfg.keeper.apyWindowSec * 3) list.shift()
+      }
+      if (carryEnabled(ctx)) {
+        const { sinks } = await readCarry(ctx)
+        for (const [key, m] of [['c:vault', d.carryVault!], ...sinks.map((x) => [`c:${x.address}`, x.address])] as [string, Address][]) {
+          if (!this.walletRates.has(m)) this.walletRates.set(m, await erc4626Rate(ctx, m))
+          const list = (this.state.samples[key] ??= [])
+          list.push({ t, index: (await this.walletRates.get(m)!()).toString() })
+          while (list.length > 2 && t - list[1].t >= keep) list.shift()
+        }
       }
       for (const m of await this.marketList()) {
         const list = (this.state.samples[m.key] ??= [])
@@ -438,6 +457,91 @@ export class Snapshotter {
     }
   }
 
+  private foldCarryEvents(logs: any[]) {
+    const c = (this.state.carry ??= { counts: {}, harvestedWeth: '0', events: [] })
+    const usd = (v: bigint) => (Number(v) / 1e6).toFixed(2)
+    const pct = (v: bigint) => (Number(v) / 100).toFixed(1)
+    const evs = parseEventLogs({
+      abi: carryVaultAbi,
+      logs,
+      eventName: ['Opened', 'Closed', 'Rotated', 'Deleveraged', 'Harvested', 'ShortfallRepaid'],
+    })
+    for (const ev of evs as any[]) {
+      const a = ev.args
+      const detail: Record<string, string> =
+        ev.eventName === 'Opened' ? { sink: a.sink, borrowedUsd: usd(a.borrowed), ltvPct: pct(a.ltvBps) }
+        : ev.eventName === 'Closed' ? { sink: a.sink, repaidUsd: usd(a.repaid), receivedUsd: usd(a.received), ltvPct: pct(a.ltvBps) }
+        : ev.eventName === 'Rotated' ? { from: a.from, to: a.to, usd: usd(a.assets) }
+        : ev.eventName === 'Deleveraged' ? { repaidUsd: usd(a.repaid), ltvPct: pct(a.ltvBps) }
+        : ev.eventName === 'Harvested' ? { stableInUsd: usd(a.stableIn), wethOut: (Number(a.assetOut) / 1e18).toFixed(5) }
+        : { wethIn: (Number(a.assetIn) / 1e18).toFixed(5), repaidUsd: usd(a.repaid) }
+      if (ev.eventName === 'Harvested') c.harvestedWeth = (BigInt(c.harvestedWeth) + a.assetOut).toString()
+      c.counts[ev.eventName] = (c.counts[ev.eventName] ?? 0) + 1
+      c.events.push({ block: String(ev.blockNumber), tx: ev.transactionHash, kind: ev.eventName, detail })
+    }
+    if (c.events.length > 30) c.events.splice(0, c.events.length - 30)
+  }
+
+  /** Conditional carry: position, live spread, the keeper's last decision and activity. */
+  private async carry(ethPrice: number) {
+    const { ctx } = this
+    if (!carryEnabled(ctx)) return null
+    const { d } = ctx
+    const [s, apr] = await Promise.all([readCarry(ctx), borrowApr(ctx).catch(() => null)])
+    const reward = (a: Address) => (ctx.cfg.carry.sinkRewardApr[a] ?? ctx.cfg.carry.sinkRewardApr[a.toLowerCase()] ?? 0) * ctx.cfg.carry.rewardHaircut
+    const sinks = s.sinks.map((x) => {
+      const apy = this.apy(`c:${x.address}`)
+      const net = apy === null ? null : round2(apy + reward(x.address))
+      return {
+        address: x.address,
+        name: x.symbol,
+        valueUsd: round2(Number(x.value) / 1e6),
+        capUsd: round2(Number(x.cap) / 1e6),
+        apy,
+        rewardApr: reward(x.address),
+        netApy: net,
+        spreadPct: net === null || apr === null ? null : round2(net - apr),
+      }
+    })
+    const collateralWeth = Number(s.collateral) / 1e18
+    const debtUsd = Number(s.debt) / 1e6
+    const stableUsd = Number(s.stableHeld) / 1e6
+    const c = this.state.carry ?? { counts: {}, harvestedWeth: '0', events: [] }
+    const decision = lastDecision(ctx)
+    return {
+      vault: d.carryVault,
+      creditMarket: d.creditMarket && d.creditMarket !== ZERO ? d.creditMarket : null,
+      status: s.debt > 0n ? 'on' : 'off',
+      collateralWeth: Math.round(collateralWeth * 1e5) / 1e5,
+      collateralUsd: round2(collateralWeth * ethPrice),
+      debtUsd: round2(debtUsd),
+      stableUsd: round2(stableUsd),
+      carryPnlUsd: round2(stableUsd - debtUsd),
+      tvlWeth: Math.round((Number(s.totalAssets) / 1e18) * 1e5) / 1e5,
+      tvlUsd: round2((Number(s.totalAssets) / 1e18) * ethPrice),
+      ltvPct: s.ltvBps / 100,
+      maxLtvPct: s.maxLtvBps / 100,
+      deleverageLtvPct: s.deleverageLtvBps / 100,
+      targetLtvPct: ctx.cfg.carry.targetLtvBps / 100,
+      healthFactor: s.healthFactor > 10n ** 30n ? null : round2(Number(s.healthFactor) / 1e18),
+      borrowApr: apr === null ? null : round2(apr),
+      vaultApy: this.apy('c:vault'),
+      rules: {
+        enterSpreadPct: ctx.cfg.carry.enterSpreadPct,
+        exitSpreadPct: ctx.cfg.carry.exitSpreadPct,
+        exitConfirmations: ctx.cfg.carry.exitConfirmations,
+        horizonHours: ctx.cfg.carry.horizonHours,
+        costMultiple: ctx.cfg.carry.costMultiple,
+        maxSinkSharePct: ctx.cfg.carry.maxSinkShareBps / 100,
+      },
+      sinks,
+      decision,
+      counts: c.counts,
+      harvestedWeth: Math.round((Number(c.harvestedWeth) / 1e18) * 1e6) / 1e6,
+      events: [...c.events].reverse().slice(0, 12),
+    }
+  }
+
   private apy(key: string): number | null {
     const samples: RateSample[] = (this.state.samples[key] ?? []).map((s) => ({ t: s.t, index: BigInt(s.index) }))
     const v = apyOverWindow(samples, this.ctx.cfg.keeper.apyWindowSec)
@@ -582,6 +686,7 @@ export class Snapshotter {
       oracle: { price: oracle.price, updatedAt: oracle.updatedAt },
       strategyA,
       selfCustody: await this.selfCustody(oracle.price),
+      carry: await this.carry(oracle.price),
       strategyB: {
         performance: aggregate(vaults),
         spreadBps: d.spreadBps,

@@ -15,6 +15,13 @@ Managed vaults (the pooled variants, tokens held by the vault):
   intents straight from stock at oracle ± spread, skewing prices toward the target ratio. Idle inventory earns
   Aave yield.
 
+Conditional module:
+
+- **Carry (ETH)** — `CarryVault`, ERC-4626 over WETH. Deposits sit as Aave collateral. Only while
+  *best sink APY − USDC borrow APR* clears entry + exit costs, the keeper borrows USDC (≤ 30% LTV, hard cap 50%)
+  into a whitelisted ERC-4626 sink (Morpho vaults on Base) and unwinds when the spread disappears. Self-custody
+  wallets may list it as a WETH market, so the same keeper routes their ETH into carry only when it pays.
+
 | Contract | Role |
 |---|---|
 | `AquaYieldApp` | Self-custody: Aqua app whose maker is a user wallet holding ERC-4626 shares. `rebalance` (keeper; listed markets of the same asset; value-preserving), `flash` (JIT with fee to the maker), `swapExactOut` (oracle ± spread with skew, band and size limits on the committed budgets). Every payment is deposited and pushed back to the wallet as shares. |
@@ -25,10 +32,11 @@ Managed vaults (the pooled variants, tokens held by the vault):
 | `InventoryVault` | B: two-asset vault and Aqua maker, one per profile. Deposits valued via oracle (must stay in band or move toward target), withdrawals in kind (no oracle). Checks that every swap leaves it no poorer at the oracle price. Keeper can rebalance through a whitelisted router with a loss cap. |
 | `OracleSwapApp` | B: Aqua app. `ask = oracle·(1 + spread − skew)`, `bid = oracle·(1 − spread − skew)`, skew ∝ distance from target (≤ spread, so never worse than oracle). Rejects stale prices, oversized trades and trades that leave the band. |
 | `YieldResolver` | Taker for both. `execute` borrows JIT liquidity (A); `executeSwap` buys from inventory (B). Runs calls against whitelisted targets (LOP / Fusion settlement, routers), pays the vault and keeps the profit. Loss-making runs revert. |
+| `CarryVault` | Carry: WETH collateral on an Aave V3 pool; keeper `open` (borrow → sink, LTV ≤ `maxLtvBps`, sink cap), `close`, `rotate`, `deleverage` (keeper any time, **anyone** above `deleverageLtvBps`), `harvest` (stable profit → WETH via whitelisted router, checked against Aave's oracle), `repayFromCollateral` (negative-carry shortfall). `totalAssets = collateral + stable held − debt`; withdrawals repay debt pro-rata first. Owner can only whitelist sinks/routers and tighten risk; no path moves funds to an arbitrary address. |
 | `adapters/ERC4626Adapter` | Morpho (MetaMorpho) vaults and Fluid fTokens. |
 | `adapters/AaveV3Adapter` | Aave V3 pool + aToken. |
 | `external/FusionContracts.sol` | Pulls the official 1inch LimitOrderProtocol v4 and Fusion `SimpleSettlement` (unmodified submodules, compiled like upstream with via-IR) so they can be deployed where 1inch has none. |
-| `mocks/*` | Test USDC/WETH, ERC-4626 market, Aave pool, Chainlink-style oracle, fixed-price router, order book. Deployed only in mock mode (testnets). |
+| `mocks/*` | Test USDC/WETH, ERC-4626 market, Aave pool, Aave-like credit market (`MockCreditMarket`: collateral, variable debt index, oracle), Chainlink-style oracle, fixed-price router, order book. Deployed only in mock mode (testnets). |
 
 Allocation decisions (APY × trust score) are taken off-chain by the keeper; the contracts enforce the invariants.
 

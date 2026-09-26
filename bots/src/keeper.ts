@@ -26,6 +26,8 @@ import { apyOverWindow, inventoryRebalance, planAllocation, queueNeedsReorder, t
 import { type Context, erc20Abi, revertReason, write } from './chain.ts'
 import { logger } from './log.ts'
 import { count, runEvery } from './loop.ts'
+import { carryEnabled, readCarry, tickCarry } from './carry.ts'
+import { ethUsd } from './prices.ts'
 
 const log = logger('keeper')
 const ZERO = '0x0000000000000000000000000000000000000000'
@@ -77,6 +79,13 @@ export async function startKeeper(ctx: Context, signal: AbortSignal) {
         await tickWallets(ctx, registry, book, walletRates, lastWalletMove, now)
       } catch (err) {
         log.error('self-custody tick failed', { error: revertReason(err) })
+      }
+    }
+    if (carryEnabled(ctx)) {
+      try {
+        await tickCarryVault(ctx, book, walletRates, now)
+      } catch (err) {
+        log.error('carry tick failed', { error: revertReason(err) })
       }
     }
     for (const vault of ctx.d.inventoryVaults ?? []) {
@@ -287,6 +296,20 @@ async function tickWallets(
       }
     }
   }
+}
+
+/** Conditional carry: sample each sink's share price, then let carry.ts decide (enter / hold / rotate / exit). */
+async function tickCarryVault(ctx: Context, book: RateBook, rates: Map<Address, RateSource>, now: number) {
+  const { cfg } = ctx
+  const { sinks } = await readCarry(ctx)
+  const apy = new Map<Address, number | undefined>()
+  for (const { address: m } of sinks) {
+    if (!rates.has(m)) rates.set(m, await erc4626Rate(ctx, m))
+    book.add(`c:${m}`, { t: now, index: await rates.get(m)!() }, cfg.keeper.apyWindowSec * 3)
+    apy.set(m, apyOverWindow(book.get(`c:${m}`), cfg.keeper.apyWindowSec))
+  }
+  const { price } = await ethUsd(ctx)
+  await tickCarry(ctx, (m) => apy.get(m), price)
 }
 
 const mockLendingVaultAbiLite = [
