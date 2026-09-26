@@ -2,7 +2,7 @@ import { type OrderRecord, type Route, type Snapshot, parseRoute } from '../api.
 import { addrUrl, txUrl, usdValue } from '../chain.ts';
 import { PROFILE_NAMES } from '../config.ts';
 import { $, ago, short, type Token, tok, usd } from '../format.ts';
-import { emptyState, ext, icon, sectionHead } from '../icons.ts';
+import { emptyState, ext, icon, type IconName, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 
 const MAX_ROWS = 10;
@@ -16,7 +16,7 @@ export const pairOf = (o: OrderRecord, snap: Snapshot) => `${symbolOf(o.makerAss
 export function routeLabel(route: string | undefined): string {
   const r = parseRoute(route);
   if (!r) return '';
-  if (r.kind === 'wallet') return `a self-custody wallet (${r.mode === 'mm' ? 'market making' : 'JIT'})`;
+  if (r.kind === 'wallet') return `a self-custody wallet (${r.mode === 'mm' ? 'market making' : r.mode === 'swapvm' ? '1inch SwapVM' : 'JIT'})`;
   return r.kind === 'jit' ? 'Strategy A (JIT)' : `Strategy B · ${PROFILE_NAMES[r.index] ?? `profile ${r.index}`}`;
 }
 
@@ -25,12 +25,20 @@ function walletMaker(r: Extract<Route, { kind: 'wallet' }>, snap: Snapshot): str
   return snap.selfCustody?.strategies.find((s) => s.maker.toLowerCase().startsWith(r.makerPrefix))?.maker ?? null;
 }
 
+/** How a wallet route used the shares: the AquaYieldApp (market making, JIT loan) or the wallet's SwapVM order. */
+export const WALLET_MODE: Record<Extract<Route, { kind: 'wallet' }>['mode'], { label: string; icon: IconName }> = {
+  mm: { label: 'Market-made', icon: 'swap' },
+  jit: { label: 'JIT loan', icon: 'zap' },
+  swapvm: { label: 'SwapVM', icon: 'code' },
+};
+
 function walletSource(r: Extract<Route, { kind: 'wallet' }>, snap: Snapshot): string {
   const maker = walletMaker(r, snap);
   const who = maker
     ? ext(addrUrl(maker), short(maker), 'mono')
     : `<span class="mono">${r.makerPrefix}…</span>`;
-  return `${r.mode === 'mm' ? 'Market-made' : 'JIT loan'} · ${who}`;
+  const m = WALLET_MODE[r.mode];
+  return `<span class="src-mode${r.mode === 'swapvm' ? ' is-swapvm' : ''}">${icon(m.icon)}${m.label}</span> · ${who}`;
 }
 
 function row(o: OrderRecord, snap: Snapshot, now: number, source: string): string {
@@ -51,7 +59,7 @@ const COPY: Record<Route['kind'], string> = {
   jit: 'Fusion intents the resolver filled with a just-in-time loan from the vault, repaid in the same transaction with a fee.',
   inventory: 'Fusion intents filled straight from a profile’s inventory at the oracle price ± spread.',
   wallet:
-    'Fusion intents filled from shares committed by self-custody wallets. The shares leave the wallet only inside the fill transaction and come back, with the payment or fee, as shares.',
+    'Fusion intents filled from shares committed by self-custody wallets, through the AquaYieldApp or the wallet’s 1inch SwapVM order. The shares leave the wallet only inside the fill transaction and come back, with the payment or fee, as shares.',
 };
 
 const EMPTY: Record<Route['kind'], string> = {
@@ -60,7 +68,7 @@ const EMPTY: Record<Route['kind'], string> = {
   wallet: 'No fills from wallet liquidity yet. Commit shares and sign an intent to see one here.',
 };
 
-/** Recent fills for one source: 'jit' routes for A, 'inventory:i' for B, 'wallet-*' for self-custody wallets. */
+/** Recent fills for one source: 'jit' routes for A, 'inventory:i' for B, 'wallet-*' and 'swapvm:*' for self-custody wallets. */
 export function mountFills(root: HTMLElement, kind: Route['kind']): void {
   const copy = COPY[kind];
   root.innerHTML = `

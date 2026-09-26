@@ -240,6 +240,38 @@ export async function planSwapVMFill(
   return { shareOut, shareIn, sharesOut, maxSharesIn: maxUint256 }
 }
 
+/**
+ * Narrows a wallet's SwapVM orders to at most one per maker for a Fusion order (makerAsset → takerAsset): the pair
+ * must match, and among a maker's orders the one whose output share the wallet holds most wins. Balances are cached
+ * per block in `cache`, so N Fusion orders × M SwapVM orders costs one balance read per (maker, share) per block.
+ */
+export async function swapVMCandidates(
+  ctx: Context,
+  orders: ShippedOrder[],
+  makerAsset: Address,
+  takerAsset: Address,
+  cache: Map<string, Promise<bigint>>,
+): Promise<ShippedOrder[]> {
+  const best = new Map<Address, { o: ShippedOrder; bal: bigint }>()
+  for (const o of orders) {
+    const [assetA, assetB] = await Promise.all([shareAsset(ctx, o.tokenA), shareAsset(ctx, o.tokenB)])
+    const out =
+      assetA === getAddress(takerAsset) && assetB === getAddress(makerAsset)
+        ? o.tokenA
+        : assetB === getAddress(takerAsset) && assetA === getAddress(makerAsset)
+          ? o.tokenB
+          : undefined
+    if (!out) continue
+    const key = `${o.maker}:${out}`
+    if (!cache.has(key)) cache.set(key, ctx.client.readContract({ address: out, abi: erc20Abi, functionName: 'balanceOf', args: [o.maker] }))
+    const bal = await cache.get(key)!
+    if (bal === 0n) continue
+    const cur = best.get(o.maker)
+    if (!cur || bal > cur.bal) best.set(o.maker, { o, bal })
+  }
+  return [...best.values()].map((x) => x.o)
+}
+
 export function orderTuple(o: ShippedOrder) {
   return { maker: o.order.maker, traits: BigInt(o.order.traits), data: o.order.data }
 }

@@ -343,8 +343,10 @@ export function mountScWallet(root: HTMLElement): void {
     const stats = st
       ? `
         <dl class="kv sc-kv">
-          <div><dt>Earned</dt><dd class="num"><span class="pos">${usd(st.earned.totalUsd)}</span> <span class="muted">JIT ${usd(st.earned.jitFeesUsd)} · spread ${usd(st.earned.spreadUsd)}</span></dd></div>
-          <div><dt>Fills from your liquidity</dt><dd class="num">${num(st.counts.flashes + st.counts.swaps, 0)} <span class="muted">(${num(st.counts.swaps, 0)} MM · ${num(st.counts.flashes, 0)} JIT)</span></dd></div>
+          <div><dt>Earned</dt><dd class="num"><span class="pos">${usd(st.earned.totalUsd)}</span> <span class="muted">JIT ${usd(st.earned.jitFeesUsd)} · spread ${usd(st.earned.spreadUsd)}${st.swapvmOrders || st.earned.swapvmUsd ? ` · SwapVM ${usd(st.earned.swapvmUsd)}` : ''}</span></dd></div>
+          <div><dt>Fills from your liquidity</dt><dd class="num">${num(st.counts.flashes + st.counts.swaps + st.counts.swapvmFills, 0)} <span class="muted">(${num(st.counts.swaps, 0)} MM · ${num(st.counts.flashes, 0)} JIT${
+            st.swapvmOrders || st.counts.swapvmFills ? ` · ${num(st.counts.swapvmFills, 0)} SwapVM` : ''
+          })</span></dd></div>
           <div><dt>Keeper moves</dt><dd class="num">${num(st.counts.rebalances, 0)}</dd></div>
           <div><dt>Committed value</dt><dd class="num">${usd(st.valueUsd)}</dd></div>
         </dl>`

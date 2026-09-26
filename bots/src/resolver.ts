@@ -23,7 +23,7 @@ import { Address as OneInchAddress, type FusionOrder } from '@1inch/fusion-sdk'
 
 import { aquaYieldAppAbi, mockSwapRouterAbi, oracleSwapAppAbi, walletResolverAbi, yieldResolverAbi } from './abis.ts'
 import { StrategyRegistry, positions, selfCustodyEnabled, type Shipped } from './wallets.ts'
-import { SwapVMRegistry, orderTuple, planSwapVMFill, swapVMEnabled, swapVMResolverAbi, type ShippedOrder } from './swapvm.ts'
+import { SwapVMRegistry, orderTuple, planSwapVMFill, swapVMCandidates, swapVMEnabled, swapVMResolverAbi, type ShippedOrder } from './swapvm.ts'
 import { type Context, revertReason, write } from './chain.ts'
 import { decodeOrder, fillCalldata, takingAmountAt } from './fusion.ts'
 import { logger } from './log.ts'
@@ -33,6 +33,7 @@ import type { OrderRecord } from './relayer.ts'
 import { relayerClient } from './relayer-client.ts'
 
 const log = logger('resolver')
+let swapvmBalances = new Map<string, Promise<bigint>>()
 const MAX_ATTEMPTS = 3
 
 type Call = { target: Address; value: bigint; data: Hex }
@@ -71,6 +72,7 @@ export async function startResolver(ctx: Context, signal: AbortSignal) {
     await swapvm?.sync()
     const block = await ctx.client.getBlock()
     const { price } = await ethUsd(ctx)
+    swapvmBalances = new Map() // per-poll cache of wallet share balances for SwapVM candidate selection
 
     for (const record of orders.sort((a, b) => a.auctionStart - b.auctionStart)) {
       if (signal.aborted) return
@@ -141,7 +143,9 @@ export async function bestRoute(
     ...inventoryRoutes(ctx, oc, ethPrice),
     jitRoute(ctx, oc, ethPrice),
     ...wallets.flatMap((sh) => walletRoutes(ctx, oc, ethPrice, sh)),
-    ...swapvmOrders.map((o) => swapvmRoute(ctx, oc, ethPrice, o)),
+    ...(await swapVMCandidates(ctx, swapvmOrders, record.makerAsset, record.takerAsset, swapvmBalances)).map((o) =>
+      swapvmRoute(ctx, oc, ethPrice, o),
+    ),
   ])
   const routes = candidates.filter((r): r is Route => !!r && r.profit > 0n)
   routes.sort((a, b) => b.profitUsd - b.gasUsd - (a.profitUsd - a.gasUsd))

@@ -11,6 +11,7 @@ import { mountMmDeposit } from './components/mm-deposit.ts';
 import { mountProfiles } from './components/profiles.ts';
 import { mountScWallet } from './components/sc-wallet.ts';
 import { mountScExplainer, mountScMarkets, mountScStrategies } from './components/self-custody.ts';
+import { mountScSwapVM } from './components/swapvm.ts';
 import { mountCarryStats, mountMmStats, mountScStats, mountStats } from './components/stats.ts';
 import { mountSwitcher } from './components/switcher.ts';
 import { mountWalletTile } from './components/wallet-tile.ts';
@@ -41,6 +42,7 @@ app.innerHTML = `
         <div class="col-main">
           <section class="card o-alloc" data-only="sc" data-mount="sc-markets"></section>
           <section class="card o-strat" data-only="sc" data-mount="sc-strategies"></section>
+          <section class="card o-strat" data-only="sc" data-mount="sc-swapvm" hidden></section>
           <section class="card o-fills" data-only="sc" data-mount="fills-sc"></section>
           <section class="card o-alloc" data-only="a" data-mount="alloc-a"></section>
           <section class="card o-alloc" data-only="b" data-mount="alloc-b"></section>
@@ -160,12 +162,14 @@ store.subscribe(({ snapshot, snapshotError }) => {
 
 let footKey = '';
 store.subscribe(({ snapshot }) => {
-  if (!snapshot || footKey === snapshot.contracts.vault) return;
-  footKey = snapshot.contracts.vault;
+  const key = `${snapshot?.contracts.vault}:${snapshot?.swapvm?.router ?? ''}`;
+  if (!snapshot || footKey === key) return;
+  footKey = key;
   const c = snapshot.contracts;
   const sc = snapshot.selfCustody;
   const items: [string, string][] = [
     ...(sc ? ([['Aqua', sc.aqua], ['AquaYieldApp', sc.app], ['Wallet resolver', sc.resolver]] as [string, string][]) : []),
+    ...(snapshot.swapvm ? ([['SwapVM router', snapshot.swapvm.router], ['SwapVMResolver', snapshot.swapvm.resolver]] as [string, string][]) : []),
     ...(snapshot.carry ? ([['CarryVault', snapshot.carry.vault]] as [string, string][]) : []),
     ['YieldVault', c.vault],
     ...c.inventoryVaults.map((a, i): [string, string] => [`Inventory · ${PROFILE_NAMES[i]}`, a]),
@@ -179,7 +183,7 @@ store.subscribe(({ snapshot }) => {
   $(app, '[data-foot]').innerHTML = `
     <h2 class="foot-title">${icon('file')}<span>Contracts</span></h2>
     <div class="contracts">${items.map(([n, a]) => `<a href="${addrUrl(a)}" target="_blank" rel="noopener"><span>${n}</span><span class="mono">${short(a)}</span></a>`).join('')}</div>
-    <p class="foot-note">Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolvers · self-custody via 1inch Aqua${snapshot.carry ? ' · conditional ETH carry on Aave' : ''}.</p>`;
+    <p class="foot-note">Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolvers · self-custody via 1inch Aqua${snapshot.swapvm ? ' and 1inch SwapVM' : ''}${snapshot.carry ? ' · conditional ETH carry on Aave' : ''}.</p>`;
 });
 
 /* ── Mount ──────────────────────────────── */
@@ -189,6 +193,7 @@ mountScExplainer(m('sc-hero'));
 mountScStats($(app, '.stats[data-only="sc"]'));
 mountScMarkets(m('sc-markets'));
 mountScStrategies(m('sc-strategies'));
+mountScSwapVM(m('sc-swapvm'));
 mountFills(m('fills-sc'), 'wallet');
 mountScWallet(m('sc-wallet'));
 mountStats($(app, '.stats[data-only="a"]'));

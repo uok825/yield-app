@@ -91,8 +91,11 @@ export interface ScStrategy {
   mm: { spreadBps: number; targetStableBps: number; bandBps: number };
   positions: ScPosition[];
   valueUsd: number;
-  earned: { jitFeesUsd: number; spreadUsd: number; totalUsd: number };
-  counts: { flashes: number; swaps: number; rebalances: number };
+  /** `swapvmUsd` is the maker spread from the wallet's 1inch SwapVM orders; already part of `totalUsd`. */
+  earned: { jitFeesUsd: number; spreadUsd: number; swapvmUsd: number; totalUsd: number };
+  counts: { flashes: number; swaps: number; rebalances: number; swapvmFills: number };
+  /** SwapVM orders this wallet runs over the same shares (0 when none). */
+  swapvmOrders: number;
   lastRebalanceBlock: number | null;
   usdcShare: number | null;
 }
@@ -117,7 +120,82 @@ export interface SelfCustody {
   defaults: ScDefaults;
   markets: ScMarket[];
   strategies: ScStrategy[];
-  totals: { wallets: number; valueUsd: number; earnedUsd: number; jitFeesUsd: number; spreadUsd: number; rebalances: number };
+  totals: {
+    wallets: number;
+    valueUsd: number;
+    earnedUsd: number;
+    jitFeesUsd: number;
+    spreadUsd: number;
+    swapvmUsd: number;
+    swapvmFills: number;
+    rebalances: number;
+  };
+}
+
+/* ── 1inch SwapVM (same shares, second app) ── */
+
+/** One side of a SwapVM order: the ERC-4626 share it trades and the maker's Aqua budget for it, in USD. */
+export interface SwapVMSide {
+  share: Address;
+  name: string;
+  budgetUsd: number;
+}
+
+/** Decoded `YieldOracleSwap` (opcode 64) arguments. */
+export interface YieldOracleSwapArgs {
+  stableShare: Address;
+  volatileShare: Address;
+  oracle: Address;
+  maxPriceAge: number; // seconds
+  spreadBps: number;
+  skewBps: number;
+  maxTradeBps: number;
+  targetStableBps: number;
+  bandBps: number;
+}
+
+export interface SwapVMInstruction {
+  opcode: number;
+  name: string;
+  bytes: number; // argument length
+}
+
+/** A SwapVM order a wallet shipped through Aqua over its lending shares. */
+export interface SwapVMOrder {
+  hash: Hex;
+  maker: Address;
+  stable: SwapVMSide | null;
+  volatile: SwapVMSide | null;
+  params: YieldOracleSwapArgs | null;
+  sequencerFeed: Address | null;
+  program: SwapVMInstruction[];
+  bytecode: Hex; // order.data: tokenA | tokenB | program
+  fills: number;
+  volumeUsd: number;
+  spreadUsd: number;
+}
+
+/** A router `Swapped` event: `tokenIn` went to the maker, `tokenOut` left the maker's wallet. */
+export interface SwapVMEvent {
+  block: string;
+  tx: Hex;
+  maker: Address;
+  orderHash: Hex;
+  tokenIn: Address;
+  tokenOut: Address;
+  inUsd: number;
+  outUsd: number;
+}
+
+export interface SwapVM {
+  router: Address;
+  resolver: Address;
+  builder: Address;
+  aqua: Address;
+  version: string;
+  orders: SwapVMOrder[];
+  totals: { orders: number; wallets: number; fills: number; volumeUsd: number; spreadUsd: number };
+  events: SwapVMEvent[]; // newest first
 }
 
 /* ── Conditional carry ───────────────────── */
@@ -226,6 +304,8 @@ export interface Snapshot {
   selfCustody: SelfCustody | null;
   /** Null on deployments without the carry vault. */
   carry: Carry | null;
+  /** Null until the SwapVM router and resolver are deployed. */
+  swapvm: SwapVM | null;
 }
 
 export type OrderStatus = 'pending' | 'filled' | 'expired' | 'cancelled';
@@ -338,8 +418,14 @@ function parseSelfCustody(sc: any): SelfCustody | null {
         usd: num0(p.usd),
       })),
       valueUsd: num0(st.valueUsd),
-      earned: { jitFeesUsd: num0(st.earned?.jitFeesUsd ?? e.jitFeesUsd), spreadUsd: num0(st.earned?.spreadUsd), totalUsd: num0(st.earned?.totalUsd) },
-      counts: { flashes: num0(st.counts?.flashes), swaps: num0(st.counts?.swaps), rebalances: num0(st.counts?.rebalances) },
+      earned: {
+        jitFeesUsd: num0(st.earned?.jitFeesUsd ?? e.jitFeesUsd),
+        spreadUsd: num0(st.earned?.spreadUsd),
+        swapvmUsd: num0(st.earned?.swapvmUsd),
+        totalUsd: num0(st.earned?.totalUsd),
+      },
+      counts: { flashes: num0(st.counts?.flashes), swaps: num0(st.counts?.swaps), rebalances: num0(st.counts?.rebalances), swapvmFills: num0(st.counts?.swapvmFills) },
+      swapvmOrders: num0(st.swapvmOrders),
       lastRebalanceBlock: n(st.lastRebalanceBlock),
       usdcShare: n(st.usdcShare),
     })),
@@ -349,8 +435,40 @@ function parseSelfCustody(sc: any): SelfCustody | null {
       earnedUsd: num0(sc.totals?.earnedUsd),
       jitFeesUsd: num0(sc.totals?.jitFeesUsd),
       spreadUsd: num0(sc.totals?.spreadUsd),
+      swapvmUsd: num0(sc.totals?.swapvmUsd),
+      swapvmFills: num0(sc.totals?.swapvmFills),
       rebalances: num0(sc.totals?.rebalances),
     },
+  };
+}
+
+function parseSwapVM(v: any): SwapVM | null {
+  if (!v || typeof v !== 'object' || !v.router) return null;
+  const side = (x: any): SwapVMSide | null => (x && x.share ? { share: x.share, name: String(x.name ?? ''), budgetUsd: num0(x.budgetUsd) } : null);
+  const orders: SwapVMOrder[] = (v.orders ?? []).map((o: any) => ({
+    ...o,
+    stable: side(o.stable),
+    volatile: side(o.volatile),
+    params: o.params && typeof o.params === 'object' ? o.params : null,
+    sequencerFeed: o.sequencerFeed ?? null,
+    program: (o.program ?? []).map((i: any) => ({ opcode: num0(i.opcode), name: String(i.name ?? `op${i.opcode}`), bytes: num0(i.bytes) })),
+    bytecode: o.bytecode ?? '0x',
+    fills: num0(o.fills),
+    volumeUsd: num0(o.volumeUsd),
+    spreadUsd: num0(o.spreadUsd),
+  }));
+  const t = v.totals ?? {};
+  return {
+    ...v,
+    orders,
+    totals: {
+      orders: n(t.orders) ?? orders.length,
+      wallets: n(t.wallets) ?? new Set(orders.map((o) => o.maker.toLowerCase())).size,
+      fills: num0(t.fills),
+      volumeUsd: num0(t.volumeUsd),
+      spreadUsd: num0(t.spreadUsd),
+    },
+    events: (v.events ?? []).map((e: any) => ({ ...e, block: String(e.block ?? ''), inUsd: num0(e.inUsd), outUsd: num0(e.outUsd) })),
   };
 }
 
@@ -401,6 +519,7 @@ export async function getSnapshot(): Promise<Snapshot> {
     block: big(s.block),
     selfCustody: labelCarryMarket(parseSelfCustody(s.selfCustody), carry),
     carry,
+    swapvm: parseSwapVM(s.swapvm),
     strategyA: {
       ...a,
       tvl: big(a.tvl),
@@ -462,15 +581,20 @@ export async function postOrder(body: { orderHash: Hex; order: unknown; extensio
 export type Route =
   | { kind: 'jit' }
   | { kind: 'inventory'; index: number }
-  /** Filled from a self-custody wallet's committed shares: market making ('mm') or a JIT loan ('jit'). */
-  | { kind: 'wallet'; mode: 'mm' | 'jit'; makerPrefix: string };
+  /** Filled from a self-custody wallet's committed shares: market making ('mm'), a JIT loan ('jit') or its 1inch SwapVM order ('swapvm'). */
+  | { kind: 'wallet'; mode: 'mm' | 'jit' | 'swapvm'; makerPrefix: string };
 
-/** 'jit' → Strategy A; 'inventory:i' → Strategy B vault i; 'wallet-mm:0x…' / 'wallet-jit:0x…' → a self-custody wallet. */
+/**
+ * 'jit' → Strategy A; 'inventory:i' → Strategy B vault i; 'wallet-mm:0x…' / 'wallet-jit:0x…' → a self-custody wallet;
+ * 'swapvm:0x…' → that wallet's SwapVM order (same shares, filled through the SwapVM router).
+ */
 export function parseRoute(route: string | undefined): Route | null {
   if (!route) return null;
   if (route === 'jit') return { kind: 'jit' };
   const w = route.match(/^wallet-(mm|jit):(0x[0-9a-fA-F]+)$/);
   if (w) return { kind: 'wallet', mode: w[1] as 'mm' | 'jit', makerPrefix: w[2].toLowerCase() };
+  const v = route.match(/^swapvm:(0x[0-9a-fA-F]+)$/);
+  if (v) return { kind: 'wallet', mode: 'swapvm', makerPrefix: v[1].toLowerCase() };
   const m = route.match(/^inventory:(\d+)$/);
   return m ? { kind: 'inventory', index: Number(m[1]) } : null;
 }

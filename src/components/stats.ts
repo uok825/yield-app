@@ -158,7 +158,7 @@ export function mountMmStats(root: HTMLElement): void {
 export function mountScStats(root: HTMLElement): void {
   const set = tiles(root, [
     { key: 'value', label: 'In wallets', icon: 'wallet', hint: 'Oracle value of lending-market shares committed via Aqua. Held by the wallets themselves, never by YieldSolver.' },
-    { key: 'earned', label: 'Earned by wallets', icon: 'coins', hint: 'JIT fees and market-making spread paid back to wallets as shares. Measured, not annualised.' },
+    { key: 'earned', label: 'Earned by wallets', icon: 'coins', hint: 'JIT fees, market-making spread and 1inch SwapVM spread paid back to wallets as shares. Measured, not annualised.' },
     { key: 'moves', label: 'Keeper moves', icon: 'refresh', hint: 'Rebalances of wallet shares between listed markets (e.g. Morpho → Aave) toward the best APY.' },
     { key: 'apy', label: 'Best lending APY', icon: 'percent' },
   ]);
@@ -176,7 +176,9 @@ export function mountScStats(root: HTMLElement): void {
     });
     set('earned', {
       value: `<span class="pos">${usd(t.earnedUsd)}</span>`,
-      sub: `JIT <span class="num">${usd(t.jitFeesUsd)}</span> · spread <span class="num">${usd(t.spreadUsd)}</span>`,
+      sub: `JIT <span class="num">${usd(t.jitFeesUsd)}</span> · spread <span class="num">${usd(t.spreadUsd)}</span>${
+        snapshot.swapvm || t.swapvmUsd ? ` · SwapVM <span class="num">${usd(t.swapvmUsd)}</span>` : ''
+      }`,
     });
     set('moves', { value: num(t.rebalances, 0), sub: 'Morpho ↔ Fluid ↔ Aave, toward the best APY' });
 

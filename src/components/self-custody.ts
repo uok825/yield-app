@@ -35,7 +35,7 @@ export function mountScExplainer(root: HTMLElement): void {
     <ol class="sc-steps">
       ${step(1, 'supply', 'Supply to a market', 'Deposit USDC or WETH into Morpho, Fluid or Aave. The interest-bearing shares land in <em>your</em> wallet.')}
       ${step(2, 'commit', 'Commit via Aqua', 'Approve Aqua once per market, then one <span class="num">ship</span> transaction records a budget. Nothing is transferred.')}
-      ${step(3, 'earn', 'Earn on both sides', 'A keeper moves your shares to the best-paying market; the resolver uses them for 1inch Fusion intents; fees come back to your wallet as shares.')}
+      ${step(3, 'earn', 'Earn on both sides', 'A keeper moves your shares to the best-paying market; the resolver uses them for 1inch Fusion intents, and the same shares back your 1inch SwapVM order; fees come back to your wallet as shares.')}
     </ol>
     <p class="custody-line">${icon('lock', 20)}<span><b>YieldSolver never holds your tokens;</b> Aqua only lets the app move them inside a single transaction that must return them (plus fees) to your wallet. Stop any time with <span class="num">dock</span>; withdraw straight from the market.</span></p>`;
 }
@@ -146,13 +146,20 @@ export function mountScStrategies(root: HTMLElement): void {
           .map((st) => {
             const mine = st.maker.toLowerCase() === me;
             const fills = st.counts.flashes + st.counts.swaps;
+            const sv = st.swapvmOrders > 0;
             return `
       <div class="st-row${mine ? ' is-mine' : ''}" role="row">
-        <span role="cell" class="st-maker">${ext(addrUrl(st.maker), short(st.maker), 'mono')}${mine ? ' <span class="pill pill-accent">You</span>' : ''}<small class="muted">${strategyFlags(st)}</small></span>
+        <span role="cell" class="st-maker">${ext(addrUrl(st.maker), short(st.maker), 'mono')}${mine ? ' <span class="pill pill-accent">You</span>' : ''}${
+          sv ? ` <span class="sv-badge" title="The same shares also back ${st.swapvmOrders} 1inch SwapVM order${st.swapvmOrders === 1 ? '' : 's'}">+ SwapVM ×${st.swapvmOrders}</span>` : ''
+        }<small class="muted">${strategyFlags(st)}</small></span>
         <span role="cell" class="st-pos">${positionLines(st, snapshot!)}</span>
         <span role="cell" class="st-value r num"><small class="sm-only muted">Value</small>${usd(st.valueUsd, 0)}</span>
-        <span role="cell" class="st-earned r num"><small class="sm-only muted">Earned</small><span class="pos">${usd(st.earned.totalUsd)}</span><small class="muted">JIT ${usd(st.earned.jitFeesUsd)} · spread ${usd(st.earned.spreadUsd)}</small></span>
-        <span role="cell" class="st-act r"><small class="sm-only muted">Activity</small><span class="num">${num(fills, 0)}</span> fills<small class="muted"><span class="num">${num(st.counts.rebalances, 0)}</span> keeper moves</small></span>
+        <span role="cell" class="st-earned r num"><small class="sm-only muted">Earned</small><span class="pos">${usd(st.earned.totalUsd)}</span><small class="muted">JIT ${usd(st.earned.jitFeesUsd)} · spread ${usd(st.earned.spreadUsd)}</small>${
+          sv || st.earned.swapvmUsd ? `<small class="muted">SwapVM ${usd(st.earned.swapvmUsd)}</small>` : ''
+        }</span>
+        <span role="cell" class="st-act r"><small class="sm-only muted">Activity</small><span class="num">${num(fills, 0)}</span> fills<small class="muted"><span class="num">${num(st.counts.rebalances, 0)}</span> keeper moves</small>${
+          sv || st.counts.swapvmFills ? `<small class="muted"><span class="num">${num(st.counts.swapvmFills, 0)}</span> on SwapVM</small>` : ''
+        }</span>
       </div>`;
           })
           .join('')
