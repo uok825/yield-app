@@ -56,7 +56,7 @@ export async function buildQuote(ctx: Context, req: QuoteRequest): Promise<Quote
   const order = newFusionOrder({
     settlement: d.fusionSettlement,
     // Every YieldSolver resolver contract that may fill (vault strategies + self-custody wallets).
-    resolvers: d.walletResolver ? [d.resolver, d.walletResolver] : [d.resolver],
+    resolvers: [d.resolver, d.walletResolver, d.swapVMResolver].filter((r): r is Address => !!r && r !== '0x0000000000000000000000000000000000000000'),
     maker: getAddress(req.maker),
     makerAsset,
     takerAsset,

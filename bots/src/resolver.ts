@@ -11,6 +11,9 @@
  *   Self-custody:  the same two ideas against liquidity that stays in users' wallets (AquaYieldApp strategies):
  *                  buy from a wallet's committed inventory (wallet-mm) or borrow JIT from it (wallet-jit).
  *                                                            → WalletResolver.executeSwap / executeFlash
+ *   SwapVM:        the same wallet shares through a 1inch SwapVM order (our YieldOracleSwap instruction): buy the
+ *                  wallet's shares of the taker asset, redeem, fill, pay in freshly minted shares.
+ *                                                            → SwapVMResolver.executeSwap → YieldSwapVMRouter.swap
  *
  * Route A needs a router the bot can quote exactly; on testnets that's MockSwapRouter. Without one (live mode) only
  * route B is used.
@@ -20,6 +23,7 @@ import { Address as OneInchAddress, type FusionOrder } from '@1inch/fusion-sdk'
 
 import { aquaYieldAppAbi, mockSwapRouterAbi, oracleSwapAppAbi, walletResolverAbi, yieldResolverAbi } from './abis.ts'
 import { StrategyRegistry, positions, selfCustodyEnabled, type Shipped } from './wallets.ts'
+import { SwapVMRegistry, orderTuple, planSwapVMFill, swapVMEnabled, swapVMResolverAbi, type ShippedOrder } from './swapvm.ts'
 import { type Context, revertReason, write } from './chain.ts'
 import { decodeOrder, fillCalldata, takingAmountAt } from './fusion.ts'
 import { logger } from './log.ts'
@@ -57,19 +61,21 @@ export async function startResolver(ctx: Context, signal: AbortSignal) {
   const attempts = new Map<Hex, number>()
   const done = new Set<Hex>()
   const registry = selfCustodyEnabled(ctx) ? new StrategyRegistry(ctx) : undefined
+  const swapvm = swapVMEnabled(ctx) ? new SwapVMRegistry(ctx) : undefined
   log.info('starting', { resolver: ctx.d.resolver, operator: operator.account.address, pollMs: cfg.resolver.pollMs })
 
   await runEvery('resolver', cfg.resolver.pollMs, signal, async () => {
     const orders = (await relayer.active()).filter((o) => !done.has(o.orderHash))
     if (orders.length === 0) return
     await registry?.sync()
+    await swapvm?.sync()
     const block = await ctx.client.getBlock()
     const { price } = await ethUsd(ctx)
 
     for (const record of orders.sort((a, b) => a.auctionStart - b.auctionStart)) {
       if (signal.aborted) return
       try {
-        const best = await bestRoute(ctx, record, block.timestamp, block.baseFeePerGas ?? 0n, price, registry?.active())
+        const best = await bestRoute(ctx, record, block.timestamp, block.baseFeePerGas ?? 0n, price, registry?.active(), swapvm?.active())
         if (!best) continue
         const notionalUsd = usdValue(ctx, record.makerAsset, BigInt(record.makingAmount), price, await decimals(ctx, record.makerAsset))
         const net = best.profitUsd - best.gasUsd
@@ -115,6 +121,7 @@ export async function bestRoute(
   baseFee: bigint,
   ethPrice: number,
   wallets: Shipped[] = [],
+  swapvmOrders: ShippedOrder[] = [],
 ): Promise<Route | undefined> {
   const order = decodeOrder(record)
   if (!order.canExecuteAt(new OneInchAddress(ctx.d.resolver), time)) return undefined
@@ -134,6 +141,7 @@ export async function bestRoute(
     ...inventoryRoutes(ctx, oc, ethPrice),
     jitRoute(ctx, oc, ethPrice),
     ...wallets.flatMap((sh) => walletRoutes(ctx, oc, ethPrice, sh)),
+    ...swapvmOrders.map((o) => swapvmRoute(ctx, oc, ethPrice, o)),
   ])
   const routes = candidates.filter((r): r is Route => !!r && r.profit > 0n)
   routes.sort((a, b) => b.profitUsd - b.gasUsd - (a.profitUsd - a.gasUsd))
@@ -448,5 +456,47 @@ async function walletJitRoute(ctx: Context, oc: OrderContext, ethPrice: number, 
           `executeFlash[${name}]`,
         )
       ).transactionHash,
+  }
+}
+
+// ─── SwapVM route ────────────────────────────────────────────────────────────
+
+async function swapvmRoute(ctx: Context, oc: OrderContext, ethPrice: number, o: ShippedOrder): Promise<Route | undefined> {
+  const { d, client } = ctx
+  if (!d.swapVMResolver || o.maker.toLowerCase() === oc.record.maker.toLowerCase()) return undefined
+  try {
+    const plan = await planSwapVMFill(ctx, o, oc.record.makerAsset, oc.record.takerAsset, oc.taking)
+    if (!plan) return undefined
+    const operator = ctx.wallet('operator')
+    const args = [orderTuple(o), plan.shareOut, plan.sharesOut, plan.maxSharesIn, [oc.fill], 0n] as const
+    const sim = await client.simulateContract({ address: d.swapVMResolver, abi: swapVMResolverAbi, functionName: 'executeSwap', args, account: operator.account })
+    const gas = await client.estimateContractGas({ address: d.swapVMResolver, abi: swapVMResolverAbi, functionName: 'executeSwap', args, account: operator.account })
+    const profitToken = oc.record.makerAsset
+    const name = `swapvm:${o.maker.slice(0, 10)}`
+    return {
+      name,
+      profit: sim.result,
+      profitToken,
+      profitUsd: usdValue(ctx, profitToken, sim.result, ethPrice, await decimals(ctx, profitToken)),
+      gasUsd: await gasUsd(ctx, gas, ethPrice),
+      send: async (minProfit: bigint) =>
+        (
+          await write(
+            ctx,
+            operator,
+            {
+              address: d.swapVMResolver!,
+              abi: swapVMResolverAbi,
+              functionName: 'executeSwap',
+              args: [orderTuple(o), plan.shareOut, plan.sharesOut, plan.maxSharesIn, [oc.fill], minProfit],
+              gas: (gas * 13n) / 10n,
+            },
+            `executeSwap[${name}]`,
+          )
+        ).transactionHash,
+    }
+  } catch (err) {
+    log.debug('swapvm route unavailable', { maker: o.maker.slice(0, 10), reason: revertReason(err).slice(0, 160) })
+    return undefined
   }
 }

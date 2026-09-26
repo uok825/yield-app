@@ -10,9 +10,10 @@
 import { type Address, type Hex, maxUint256, parseEther, parseUnits, toHex, zeroHash } from 'viem'
 import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts'
 
-import { aquaAbi, aave4626Abi, carryVaultAbi, mockCreditMarketAbi, inventoryVaultAbi, mockAavePoolAbi, mockERC20Abi, mockLendingVaultAbi, yieldVaultAbi } from './abis.ts'
+import { aquaAbi, aave4626Abi, carryVaultAbi, mockCreditMarketAbi, yieldSwapVMStrategiesAbi, inventoryVaultAbi, mockAavePoolAbi, mockERC20Abi, mockLendingVaultAbi, yieldVaultAbi } from './abis.ts'
 import { assertCleanWallets } from './maker.ts'
 import { StrategyRegistry, encodeStrategy, selfCustodyEnabled, type WalletStrategy } from './wallets.ts'
+import { SwapVMRegistry, swapVMEnabled, erc4626Lite } from './swapvm.ts'
 import { type Context, erc20Abi, write } from './chain.ts'
 import { logger } from './log.ts'
 
@@ -22,6 +23,7 @@ export async function seed(ctx: Context) {
   await seedVaults(ctx)
   await seedCarry(ctx)
   await seedWallets(ctx)
+  await seedSwapVM(ctx)
 }
 
 async function seedCarry(ctx: Context) {
@@ -204,5 +206,89 @@ export async function seedWallets(ctx: Context) {
       args: [d.aquaYieldApp!, encodeStrategy(strategy), markets, budgets],
     })
     log.info('wallet LP shipped strategy', { lp: lp.address, usd, target: target / 100, usdcMarket })
+  }
+}
+
+/**
+ * Every wallet LP also runs its shares as 1inch SwapVM orders — one per (stable market × volatile market) pair it
+ * lists — shipped through the same Aqua next to its AquaYieldApp strategy: same shares, second app. Budgets are caps
+ * (the LP's whole stable / volatile value in that market's shares), so wherever the keeper moves the position (Morpho
+ * → Fluid, Aave-WETH → carry…) the matching order keeps quoting. Idempotent.
+ */
+export async function seedSwapVM(ctx: Context) {
+  const { d, client, cfg } = ctx
+  if (!swapVMEnabled(ctx) || !selfCustodyEnabled(ctx)) return log.info('SwapVM not deployed; skipping SwapVM orders')
+  const lps = walletLps(ctx)
+  const registry = new SwapVMRegistry(ctx)
+  await registry.sync()
+  const wallets = new StrategyRegistry(ctx)
+  await wallets.sync()
+  const funder = ctx.wallet('deployer')
+  const stableMarkets = d.walletStableMarkets ?? []
+  const volatileMarkets = d.walletVolatileMarkets ?? []
+  if (volatileMarkets.length === 0 || stableMarkets.length === 0) return
+  const valueIn = async (markets: readonly Address[], who: Address) =>
+    (
+      await Promise.all(
+        markets.map(async (m) =>
+          client.readContract({
+            address: m,
+            abi: erc4626Lite,
+            functionName: 'convertToAssets',
+            args: [await client.readContract({ address: m, abi: erc20Abi, functionName: 'balanceOf', args: [who] })],
+          }),
+        ),
+      )
+    ).reduce((a, b) => a + b, 0n)
+
+  for (const lp of lps) {
+    const aquaStrategy = wallets.active().find((s) => s.maker === lp.address)
+    if (!aquaStrategy) continue // not a self-custody LP yet
+    const target = aquaStrategy.strategy.mm.targetStableBps || 7_000
+    const listed = aquaStrategy.strategy.volatileMarkets
+    const stables = aquaStrategy.strategy.stableMarkets
+    const stableAssets = await valueIn(stables, lp.address)
+    const volAssets = await valueIn(listed, lp.address)
+    if (stableAssets === 0n && volAssets === 0n) continue
+
+    for (const [stableShare, volShare] of stables.flatMap((st) => listed.map((v) => [st, v] as const))) {
+      if (registry.active().some((o) => o.maker === lp.address && o.params?.stableShare === stableShare && o.params?.volatileShare === volShare)) continue
+      if ((await client.getBalance({ address: lp.address })) < parseEther('0.0005')) {
+        const hash = await funder.sendTransaction({ to: lp.address, value: parseEther(process.env.MAKER_GAS_ETH ?? '0.002') })
+        await client.waitForTransactionReceipt({ hash })
+      }
+      const params = {
+        maker: lp.address,
+        stableShare,
+        volatileShare: volShare,
+        oracle: d.oracle,
+        maxPriceAge: cfg.swapvm.maxPriceAge,
+        spreadBps: cfg.swapvm.spreadBps,
+        skewBps: cfg.swapvm.skewBps,
+        maxTradeBps: cfg.swapvm.maxTradeBps,
+        targetStableBps: target,
+        bandBps: cfg.swapvm.bandBps,
+        sequencerFeed: (cfg.swapvm.sequencerFeed || '0x0000000000000000000000000000000000000000') as Address,
+        sequencerGrace: cfg.swapvm.sequencerGraceSec,
+        salt: zeroHash,
+      }
+      const [encoded] = await client.readContract({ address: d.swapVMStrategies!, abi: yieldSwapVMStrategiesAbi, functionName: 'strategy', args: [params] })
+      const [stableBudget, volBudget] = await Promise.all([
+        client.readContract({ address: stableShare, abi: erc4626Lite, functionName: 'convertToShares', args: [stableAssets] }),
+        client.readContract({ address: volShare, abi: erc4626Lite, functionName: 'convertToShares', args: [volAssets] }),
+      ])
+      const w = ctx.walletFor(lp.key)
+      for (const token of [stableShare, volShare]) {
+        const allowance = await client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [lp.address, d.aqua] })
+        if (allowance < maxUint256 / 2n) await write(ctx, w, { address: token, abi: erc20Abi, functionName: 'approve', args: [d.aqua, maxUint256] })
+      }
+      await write(ctx, w, {
+        address: d.aqua,
+        abi: aquaAbi,
+        functionName: 'ship',
+        args: [d.swapVMRouter!, encoded, [stableShare, volShare], [stableBudget, volBudget]],
+      })
+      log.info('wallet LP shipped SwapVM order', { lp: lp.address, stableShare, volShare, spreadBps: params.spreadBps, target })
+    }
   }
 }

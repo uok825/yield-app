@@ -89,7 +89,7 @@ async function main() {
   }
 
   step('deploy contracts (forge script, --slow)')
-  for (const script of ['Deploy.s.sol', 'DeployWallet.s.sol', 'DeployCarry.s.sol']) {
+  for (const script of ['Deploy.s.sol', 'DeployWallet.s.sol', 'DeployCarry.s.sol', 'DeploySwapVM.s.sol']) {
     const deploy = spawnSync(
       foundryBin('forge'),
       ['script', `script/${script}`, '--rpc-url', RPC, '--private-key', KEYS.deployer, '--broadcast', '--slow'],
@@ -175,8 +175,10 @@ async function main() {
   const snap = (await (await fetch(`${process.env.RELAYER_URL}/v1/snapshot`)).json()) as any
   const sc = snap.selfCustody
   const carry = snap.carry
+  const swapvm = snap.swapvm
   controller.abort()
   await Promise.allSettled(bots)
+  console.log('swapvm:', JSON.stringify(swapvm?.totals), swapvm?.orders?.map((o: any) => `${o.maker.slice(0, 8)} ${o.stable?.name}/${o.volatile?.name} ${o.program.map((i: any) => i.name).join('→')} fills ${o.fills}`))
   console.log('carry:', JSON.stringify({ status: carry?.status, ltv: carry?.ltvPct, debt: carry?.debtUsd, pnl: carry?.carryPnlUsd, borrowApr: carry?.borrowApr, counts: carry?.counts, decision: carry?.decision?.reason }))
   console.log('self-custody:', JSON.stringify(sc?.totals), sc?.strategies?.map((x: any) => `${x.maker.slice(0, 8)} $${x.valueUsd} earned $${x.earned.totalUsd} rebalances ${x.counts.rebalances} in ${x.positions.map((p: any) => p.name + '/' + p.asset).join(',')}`))
   const checks: [string, boolean][] = [
@@ -190,6 +192,9 @@ async function main() {
     ['orders filled from wallet liquidity', marketsUsed.some((r) => r.startsWith('wallet-'))],
     ['keeper moved wallet shares to a better market', (sc?.totals?.rebalances ?? 0) >= 1],
     ['self-custody LPs earned', (sc?.totals?.earnedUsd ?? 0) > 0],
+    ['wallets shipped SwapVM orders over the same shares', (swapvm?.totals?.orders ?? 0) >= 2 && (swapvm?.orders ?? []).every((o: any) => o.program.some((i: any) => i.name === 'YieldOracleSwap'))],
+    ['orders filled through SwapVM (YieldOracleSwap)', marketsUsed.includes('swapvm') && (swapvm?.totals?.fills ?? 0) >= 1],
+    ['SwapVM makers earned the spread', (swapvm?.totals?.spreadUsd ?? 0) > 0],
     ['carry keeper decided with live rates', !!carry?.decision && carry.decision.spreadPct !== null],
     ['carry opened only on positive spread', (carry?.counts?.Opened ?? 0) >= 1 && carry.ltvPct <= carry.maxLtvPct],
     ['carry position earned more than its debt', carry?.status !== 'on' || carry.carryPnlUsd >= 0],

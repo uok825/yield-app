@@ -20,7 +20,8 @@ import { apyOverWindow, type RateSample } from './allocation.ts'
 import { aaveIndex, describeAdapter, type MarketInfo } from './markets.ts'
 import { ethUsd } from './prices.ts'
 import { borrowApr, carryEnabled, lastDecision, readCarry } from './carry.ts'
-import { carryVaultAbi } from './abis.ts'
+import { carryVaultAbi, yieldSwapVMRouterAbi } from './abis.ts'
+import { SwapVMRegistry, erc4626Lite, orderBudgets, shareAsset, swapVMEnabled } from './swapvm.ts'
 import { logger } from './log.ts'
 import {
   type PerfSample,
@@ -60,6 +61,14 @@ interface Persisted {
     { jitFees: Record<string, string>; flashes: number; spreadUsd: number; swaps: number; rebalances: number; lastRebalance?: number }
   >
   inception?: Record<string, PerfSample & { fromDeposit?: boolean }>
+  /** SwapVM fills (router `Swapped` events), valued in USD at fold time. */
+  swapvm?: {
+    fills: number
+    volumeUsd: number
+    spreadUsd: number
+    byOrder: Record<string, { fills: number; volumeUsd: number; spreadUsd: number }>
+    events: { block: string; tx: string; maker: string; orderHash: string; tokenIn: string; tokenOut: string; inUsd: number; outUsd: number }[]
+  }
   /** CarryVault activity from its events. */
   carry?: { counts: Record<string, number>; harvestedWeth: string; events: { block: string; tx: string; kind: string; detail: Record<string, string> }[] }
 }
@@ -69,6 +78,7 @@ export class Snapshotter {
   private markets?: { key: string; name: string; rate: MarketInfo['rate'] }[]
   private cache?: { at: number; value: unknown }
   private lastSampleT = 0
+  private swapvmRegistry?: SwapVMRegistry
 
   constructor(
     private ctx: Context,
@@ -110,6 +120,7 @@ export class Snapshotter {
       ...(d.inventoryVaults ?? []),
       ...(selfCustodyEnabled(ctx) ? [d.aquaYieldApp!] : []),
       ...(carryEnabled(ctx) ? [d.carryVault!] : []),
+      ...(swapVMEnabled(ctx) ? [d.swapVMRouter!] : []),
     ].filter(
       (a) => a && a !== ZERO,
     )
@@ -122,6 +133,7 @@ export class Snapshotter {
       }
       if (selfCustodyEnabled(ctx)) await this.foldWalletEvents(logs)
       if (carryEnabled(ctx)) this.foldCarryEvents(logs)
+      if (swapVMEnabled(ctx)) await this.foldSwapVMEvents(logs)
       for (const ev of parseEventLogs({ abi: inventoryVaultAbi, logs, eventName: 'SwapSettled' })) {
         const key = getAddress(ev.address)
         const s = (this.state.spread[key] ??= { income: '0', swaps: 0 })
@@ -372,6 +384,21 @@ export class Snapshotter {
     )
     const toUsd = (asset: 'USDC' | 'WETH', amount: bigint) =>
       asset === 'USDC' ? Number(amount) / 1e6 : (Number(amount) / 1e18) * ethPrice
+    let svOrders: { maker: Address; hash: string }[] = []
+    if (swapVMEnabled(ctx)) {
+      this.swapvmRegistry ??= new SwapVMRegistry(ctx)
+      await this.swapvmRegistry.sync()
+      svOrders = this.swapvmRegistry.active()
+    }
+    const svStats = (maker: Address) => {
+      const mine = svOrders.filter((o) => o.maker === maker)
+      const by = this.state.swapvm?.byOrder ?? {}
+      return {
+        orders: mine.length,
+        fills: mine.reduce((a, o) => a + (by[o.hash]?.fills ?? 0), 0),
+        spreadUsd: round2(mine.reduce((a, o) => a + (by[o.hash]?.spreadUsd ?? 0), 0)) ?? 0,
+      }
+    }
     const strategies = await Promise.all(
       this.registry.active().map(async (sh) => {
         const pos = await positions(ctx, sh)
@@ -401,6 +428,7 @@ export class Snapshotter {
           return sum + toUsd(asset, BigInt(fee))
         }, 0)
         const valueUsd = rows.reduce((sum, r) => sum + r.usd, 0)
+        const sv = svStats(sh.maker)
         return {
           maker: sh.maker,
           hash: sh.hash,
@@ -417,9 +445,11 @@ export class Snapshotter {
           earned: {
             jitFeesUsd: round2(jitFeesUsd),
             spreadUsd: round2(income.spreadUsd),
-            totalUsd: round2(jitFeesUsd + income.spreadUsd),
+            swapvmUsd: sv.spreadUsd,
+            totalUsd: round2(jitFeesUsd + income.spreadUsd + sv.spreadUsd),
           },
-          counts: { flashes: income.flashes, swaps: income.swaps, rebalances: income.rebalances },
+          counts: { flashes: income.flashes, swaps: income.swaps, rebalances: income.rebalances, swapvmFills: sv.fills },
+          swapvmOrders: sv.orders,
           lastRebalanceBlock: income.lastRebalance ?? null,
           usdcShare: valueUsd > 0 ? round2((rows.filter((r) => r.asset === 'USDC').reduce((a, r) => a + r.usd, 0) / valueUsd) * 100) : null,
         }
@@ -452,8 +482,99 @@ export class Snapshotter {
         earnedUsd: sum((x) => x.earned.totalUsd ?? 0),
         jitFeesUsd: sum((x) => x.earned.jitFeesUsd ?? 0),
         spreadUsd: sum((x) => x.earned.spreadUsd ?? 0),
+        swapvmUsd: sum((x) => x.earned.swapvmUsd ?? 0),
+        swapvmFills: strategies.reduce((a, x) => a + x.counts.swapvmFills, 0),
         rebalances: strategies.reduce((a, x) => a + x.counts.rebalances, 0),
       },
+    }
+  }
+
+  /** USD value of `shares` of an ERC-4626 share token (USDC or WETH underlying) at the current oracle price. */
+  private async shareUsd(share: Address, shares: bigint, ethPrice: number) {
+    const [asset, assets] = await Promise.all([
+      shareAsset(this.ctx, share),
+      this.ctx.client.readContract({ address: share, abi: erc4626Lite, functionName: 'convertToAssets', args: [shares] }),
+    ])
+    return asset === getAddress(this.ctx.d.usdc) ? Number(assets) / 1e6 : (Number(assets) / 1e18) * ethPrice
+  }
+
+  private async foldSwapVMEvents(logs: any[]) {
+    const evs = parseEventLogs({ abi: yieldSwapVMRouterAbi, logs, eventName: 'Swapped' }).filter(
+      (e) => getAddress(e.address) === getAddress(this.ctx.d.swapVMRouter!),
+    )
+    if (evs.length === 0) return
+    const { price } = await ethUsd(this.ctx)
+    const sv = (this.state.swapvm ??= { fills: 0, volumeUsd: 0, spreadUsd: 0, byOrder: {}, events: [] })
+    for (const ev of evs) {
+      const a = ev.args
+      const [inUsd, outUsd] = await Promise.all([this.shareUsd(a.tokenIn, a.amountIn, price), this.shareUsd(a.tokenOut, a.amountOut, price)])
+      const o = (sv.byOrder[a.orderHash] ??= { fills: 0, volumeUsd: 0, spreadUsd: 0 })
+      for (const x of [sv, o]) {
+        x.fills++
+        x.volumeUsd += outUsd
+        x.spreadUsd += inUsd - outUsd
+      }
+      sv.events.push({
+        block: String(ev.blockNumber),
+        tx: ev.transactionHash,
+        maker: a.maker,
+        orderHash: a.orderHash,
+        tokenIn: a.tokenIn,
+        tokenOut: a.tokenOut,
+        inUsd: round2(inUsd) ?? 0,
+        outUsd: round2(outUsd) ?? 0,
+      })
+    }
+    if (sv.events.length > 30) sv.events.splice(0, sv.events.length - 30)
+  }
+
+  /** SwapVM: the router, our instructions, and every wallet's shipped orders with their decoded programs. */
+  private async swapvm(ethPrice: number) {
+    const { ctx } = this
+    if (!swapVMEnabled(ctx)) return null
+    const { d } = ctx
+    this.swapvmRegistry ??= new SwapVMRegistry(ctx)
+    await this.swapvmRegistry.sync()
+    const sv = this.state.swapvm ?? { fills: 0, volumeUsd: 0, spreadUsd: 0, byOrder: {}, events: [] }
+    const name = (m: Address) => {
+      const n = walletMarketName(ctx, m)
+      return MARKET_NAMES[n] ?? (n === 'carry' ? 'Carry (ETH)' : 'Lending')
+    }
+    const orders = await Promise.all(
+      this.swapvmRegistry.active().map(async (o) => {
+        const budgets = await orderBudgets(ctx, o)
+        const p = o.params
+        const stats = sv.byOrder[o.hash] ?? { fills: 0, volumeUsd: 0, spreadUsd: 0 }
+        return {
+          hash: o.hash,
+          maker: o.maker,
+          stable: p ? { share: p.stableShare, name: name(p.stableShare), budgetUsd: round2(await this.shareUsd(p.stableShare, budgets[p.stableShare] ?? 0n, ethPrice)) } : null,
+          volatile: p ? { share: p.volatileShare, name: name(p.volatileShare), budgetUsd: round2(await this.shareUsd(p.volatileShare, budgets[p.volatileShare] ?? 0n, ethPrice)) } : null,
+          params: p ?? null,
+          sequencerFeed: o.sequencerFeed ?? null,
+          program: o.program.map((i) => ({ opcode: i.opcode, name: i.name, bytes: (i.args.length - 2) / 2 })),
+          bytecode: o.order.data,
+          fills: stats.fills,
+          volumeUsd: round2(stats.volumeUsd),
+          spreadUsd: round2(stats.spreadUsd),
+        }
+      }),
+    )
+    return {
+      router: d.swapVMRouter,
+      resolver: d.swapVMResolver,
+      builder: d.swapVMStrategies,
+      aqua: d.aqua,
+      version: 'SwapVM 1.2 · AquaOpcodes + YieldOracleSwap (64) + SequencerGuard (65)',
+      orders,
+      totals: {
+        orders: orders.length,
+        wallets: new Set(orders.map((o) => o.maker)).size,
+        fills: sv.fills,
+        volumeUsd: round2(sv.volumeUsd),
+        spreadUsd: round2(sv.spreadUsd),
+      },
+      events: [...sv.events].reverse().slice(0, 12),
     }
   }
 
@@ -687,6 +808,7 @@ export class Snapshotter {
       strategyA,
       selfCustody: await this.selfCustody(oracle.price),
       carry: await this.carry(oracle.price),
+      swapvm: await this.swapvm(oracle.price),
       strategyB: {
         performance: aggregate(vaults),
         spreadBps: d.spreadBps,

@@ -45,6 +45,10 @@ export interface Deployment {
   carrySinks?: Address[]
   creditMarket?: Address // mock deployments only
   carryAaveOracle?: Address
+  // 1inch SwapVM strategies (DeploySwapVM.s.sol)
+  swapVMRouter?: Address
+  swapVMStrategies?: Address
+  swapVMResolver?: Address
 }
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -157,6 +161,17 @@ export function loadConfig() {
       rewardHaircut: num('CARRY_REWARD_HAIRCUT', 0.5),
       /** L1 data fee (USD) added to the open + close gas cost on an OP-stack chain. */
       l1FeeUsd: num('CARRY_L1_FEE_USD', 0.02),
+    },
+    /** SwapVM orders the seed ships for wallet LPs (YieldOracleSwap instruction parameters). */
+    swapvm: {
+      spreadBps: num('SWAPVM_SPREAD_BPS', 15),
+      skewBps: num('SWAPVM_SKEW_BPS', 10),
+      maxTradeBps: num('SWAPVM_MAX_TRADE_BPS', 2_000),
+      bandBps: num('SWAPVM_BAND_BPS', 500),
+      maxPriceAge: num('SWAPVM_MAX_PRICE_AGE_SEC', 3_600),
+      /** Chainlink L2 sequencer uptime feed (Base mainnet: 0xBCF85224fc0756B9Fa45aA7892530B47e10b6433); empty = off. */
+      sequencerFeed: env('SWAPVM_SEQUENCER_FEED', ''),
+      sequencerGraceSec: num('SWAPVM_SEQUENCER_GRACE_SEC', 3_600),
     },
     maker: {
       intervalMs: num('MAKER_INTERVAL_MS', 15_000),

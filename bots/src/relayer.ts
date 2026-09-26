@@ -272,7 +272,7 @@ export async function startRelayer(ctx: Context, signal: AbortSignal) {
           domain,
           limitOrderProtocol: ctx.d.limitOrderProtocol,
           settlement: ctx.d.fusionSettlement,
-          resolvers: ctx.d.walletResolver ? [ctx.d.resolver, ctx.d.walletResolver] : [ctx.d.resolver],
+          resolvers: [ctx.d.resolver, ctx.d.walletResolver, ctx.d.swapVMResolver].filter((r): r is Address => !!r && r !== '0x0000000000000000000000000000000000000000'),
           tokens: { usdc: ctx.d.usdc, weth: ctx.d.weth },
         })
       }
