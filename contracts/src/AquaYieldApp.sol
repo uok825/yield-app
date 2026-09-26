@@ -6,8 +6,8 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
-import {AquaApp} from "@1inch/aqua/AquaApp.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
+import {AquaApp} from "@1inch/aqua/src/AquaApp.sol";
 
 import {IChainlinkAggregator} from "./interfaces/IChainlinkAggregator.sol";
 import {IAquaYieldCallback} from "./interfaces/IAquaYield.sol";

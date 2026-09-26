@@ -2,8 +2,8 @@
 pragma solidity 0.8.30;
 
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
-import {AquaApp} from "@1inch/aqua/AquaApp.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
+import {AquaApp} from "@1inch/aqua/src/AquaApp.sol";
 
 import {IInventoryMaker, IOracleSwapCallback} from "./interfaces/IOracleSwap.sol";
 

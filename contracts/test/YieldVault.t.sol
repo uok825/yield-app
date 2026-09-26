@@ -6,7 +6,7 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
 
 import {Fixture} from "./utils/Fixture.sol";
 import {YieldVault} from "../src/YieldVault.sol";

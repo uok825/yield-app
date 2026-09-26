@@ -5,7 +5,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
 
 import {Fixture} from "./utils/Fixture.sol";
 import {Aave4626} from "../src/Aave4626.sol";

@@ -16,3 +16,6 @@
 [submodule "contracts/lib/fusion-protocol"]
 	path = contracts/lib/fusion-protocol
 	url = https://github.com/1inch/fusion-protocol
+[submodule "contracts/lib/swap-vm"]
+	path = contracts/lib/swap-vm
+	url = https://github.com/1inch/swap-vm

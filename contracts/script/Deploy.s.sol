@@ -4,8 +4,8 @@ pragma solidity 0.8.30;
 import {Script, console2} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
-import {Aqua} from "@1inch/aqua/Aqua.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
+import {Aqua} from "@1inch/aqua/src/Aqua.sol";
 
 import {YieldVault} from "../src/YieldVault.sol";
 import {InventoryVault} from "../src/InventoryVault.sol";

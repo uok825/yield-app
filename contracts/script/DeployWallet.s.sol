@@ -3,7 +3,7 @@ pragma solidity 0.8.30;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
 
 import {Aave4626} from "../src/Aave4626.sol";
 import {AquaYieldApp} from "../src/AquaYieldApp.sol";

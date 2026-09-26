@@ -3,8 +3,8 @@ pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
-import {Aqua} from "@1inch/aqua/Aqua.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
+import {Aqua} from "@1inch/aqua/src/Aqua.sol";
 
 import {YieldVault} from "../../src/YieldVault.sol";
 import {JitLiquidityApp} from "../../src/JitLiquidityApp.sol";

@@ -10,19 +10,27 @@ bytecode_hash = "none"
 fs_permissions = [{ access = "read-write", path = "./deployments" }]
 # 1inch LOP v4 / Fusion settlement are compiled exactly like upstream (via-IR, 1M runs); our contracts keep the
 # default pipeline.
-additional_compiler_profiles = [{ name = "oneinch", via_ir = true, optimizer_runs = 1000000 }]
+additional_compiler_profiles = [
+    { name = "oneinch", via_ir = true, optimizer_runs = 1000000 },
+    { name = "swapvm", via_ir = true, optimizer_runs = 1 },
+]
 compilation_restrictions = [
     { paths = "lib/limit-order-protocol/contracts/**", via_ir = true, optimizer_runs = 1000000 },
     { paths = "lib/fusion-protocol/contracts/**", via_ir = true, optimizer_runs = 1000000 },
     { paths = "src/external/**", via_ir = true, optimizer_runs = 1000000 },
+    # 1inch SwapVM is built with via-IR upstream; so is our router on top of it.
+    # Size-optimised: the router (SwapVM core + Aqua opcodes + ours) must stay under the 24 KiB code limit.
+    { paths = "lib/swap-vm/src/**", via_ir = true, optimizer_runs = 1 },
+    { paths = "src/swapvm/**", via_ir = true, optimizer_runs = 1 },
 ]
 remappings = [
     "forge-std/=lib/forge-std/src/",
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "@1inch/solidity-utils/=lib/solidity-utils/",
-    "@1inch/aqua/=lib/aqua/src/",
+    "@1inch/aqua/=lib/aqua/",
     "@1inch/limit-order-protocol-contract/=lib/limit-order-protocol/",
     "@1inch/fusion-protocol/=lib/fusion-protocol/",
+    "@1inch/swap-vm/=lib/swap-vm/src/",
 ]
 
 [fuzz]

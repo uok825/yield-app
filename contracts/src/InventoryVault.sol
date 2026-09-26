@@ -11,7 +11,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
+import {IAqua} from "@1inch/aqua/src/interfaces/IAqua.sol";
 
 import {IYieldAdapter} from "./interfaces/IYieldAdapter.sol";
 import {IChainlinkAggregator} from "./interfaces/IChainlinkAggregator.sol";
