@@ -4,7 +4,7 @@ import { PROFILE_NAMES } from '../config.ts';
 import { $, apyPct, bps, num, pct, units, usd } from '../format.ts';
 import { icon, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
-import { apyBasis, apyHtml, extrapolatedTitle, isExtrapolated, signedHtml, sparkLegend, sparkline } from './yield.ts';
+import { apyBasis, apyHtml, extrapolatedTitle, isExtrapolated, realisedHtml, signedHtml, sparkLegend, sparkline } from './yield.ts';
 
 /** Track 0–100% USDC by value, shaded target band, target tick and a marker for the current ratio. */
 function ratioBar(v: InventoryVault, ok: boolean): string {
@@ -50,15 +50,21 @@ function yieldRow(v: InventoryVault, i: number): string {
       p?.history.at(-1)?.hodl == null ? '—' : num(p.history.at(-1)!.hodl!, 4)
     } since first deposit`,
   });
-  const breakdown = p?.netApy == null ? '' : `<small class="muted y-break"><span><span class="num">${part(p.lendingApy)}</span> lend</span> <span>+ <span class="num">${part(p.incomeApy)}</span> spread</span></small>`;
   const earned = p?.earnedUsd ?? units(v.spreadIncome, 6);
+  const full = !isExtrapolated(p?.spanSec ?? null) && p?.netApy != null;
+  // Under a full day of data: realised spread return on the profile's value (not annualised) + measured lending APY.
+  const value = units(v.value, 6);
+  const headline = full ? apyHtml(p!.netApy, p!.spanSec) : realisedHtml(value > 0 ? (earned / value) * 100 : null);
+  const breakdown = full
+    ? `<small class="muted y-break"><span><span class="num">${part(p!.lendingApy)}</span> lend</span> <span>+ <span class="num">${part(p!.incomeApy)}</span> spread</span></small>`
+    : `<small class="muted y-break"><span>spread so far</span> <span>+ lend <span class="num">${part(p?.lendingApy)}</span> APY</span></small>`;
   return `
     <div class="yield-row" role="row">
       <span role="cell" class="y-name"><b>${name(v, i)}</b><small class="muted num">${usd(units(v.value, 6), 0)}</small></span>
       <span role="cell" class="y-trend">${trend}</span>
       <span role="cell" class="y-hodl r"><small class="sm-only muted">vs HODL</small>${signedHtml(p?.vsHodlPct ?? null)}</span>
       <span role="cell" class="y-earned r num"><small class="sm-only muted">Earned</small><span class="pos">${usd(earned)}</span><small class="muted hide-sm">${num(v.swaps, 0)} swaps</small></span>
-      <span role="cell" class="y-apy r"><small class="sm-only muted">Net APY</small>${apyHtml(p?.netApy ?? null, p?.spanSec ?? null)}${breakdown}</span>
+      <span role="cell" class="y-apy r"><small class="sm-only muted">${full ? 'Net APY' : 'Return'}</small>${headline}${breakdown}</span>
     </div>`;
 }
 
@@ -133,7 +139,7 @@ export function mountProfiles(root: HTMLElement): void {
           <span role="columnheader">Share price vs HODL ${sparkLegend}</span>
           <span role="columnheader" class="r" title="Share value vs holding the same USDC/WETH basket at today’s ETH price">vs HODL</span>
           <span role="columnheader" class="r" title="Spread income since the first deposit">Earned</span>
-          <span role="columnheader" class="r">Net APY</span>
+          <span role="columnheader" class="r" data-apy-head>Return so far</span>
         </div>
         <div class="yield-body"></div>
       </div>
@@ -155,9 +161,12 @@ export function mountProfiles(root: HTMLElement): void {
     abody.innerHTML = b.vaults.map(allocRow(snapshot.oracle.price)).join('');
     const spans = b.vaults.map((v) => v.performance?.spanSec).filter((x): x is number => x != null);
     const spanSec = spans.length ? Math.max(...spans) : null;
-    basis.textContent = `Earned and vs HODL are measured since each profile’s first deposit. Net APY is ${apyBasis(spanSec)}${
-      isExtrapolated(spanSec) ? ', so treat it as an extrapolation, not a forecast' : ''
-    }.`;
-    basis.title = isExtrapolated(spanSec) ? extrapolatedTitle(spanSec) : '';
+    const full = !isExtrapolated(spanSec);
+    const head = root.querySelector<HTMLElement>('[data-apy-head]');
+    if (head) head.textContent = full ? 'Net APY' : 'Return so far';
+    basis.textContent = full
+      ? `Earned and vs HODL are measured since each profile’s first deposit. Net APY is ${apyBasis(spanSec)}.`
+      : `Earned, vs HODL and return are measured since each profile’s first deposit, not annualised. Net APY appears once a full 24h of data is sampled.`;
+    basis.title = full ? '' : extrapolatedTitle(spanSec);
   });
 }

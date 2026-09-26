@@ -8,6 +8,14 @@ export const MEASURING = '<span class="muted measuring">measuring…</span>';
 
 export const isExtrapolated = (spanSec: number | null) => spanSec === null || spanSec < FULL_WINDOW_SEC;
 
+/**
+ * Realised return, shown instead of an annualised APY until a full day of data exists: "+0.43%" plus the elapsed time.
+ * Annualising a few hours of synthetic testnet flow produces meaningless triple-digit APYs.
+ */
+export function realisedHtml(returnPct: number | null): string {
+  return returnPct === null ? MEASURING : signedHtml(returnPct);
+}
+
 /** "annualised from 1h 23m of testnet flow" — the basis every APY is shown with. */
 export const apyBasis = (spanSec: number | null) =>
   spanSec === null ? 'annualised once enough flow is sampled' : `annualised from ${span(spanSec)} of testnet flow`;

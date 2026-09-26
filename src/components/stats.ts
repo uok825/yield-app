@@ -1,8 +1,8 @@
-import { $, ago, apyPct, esc, num, pct, units, usd } from '../format.ts';
+import { $, ago, apyPct, esc, num, pct, span, units, usd } from '../format.ts';
 import { type IconName, icon } from '../icons.ts';
 import { store } from '../store.ts';
 import { carryBest, signedPp, spreadClass } from './carry.ts';
-import { MEASURING, apyBasis, extrapolatedTitle, isExtrapolated, signedHtml, sparkline } from './yield.ts';
+import { FULL_WINDOW_SEC, MEASURING, apyBasis, isExtrapolated, realisedHtml, signedHtml, sparkline } from './yield.ts';
 
 interface TileDef {
   key: string;
@@ -22,6 +22,8 @@ interface TileValue {
   aside?: string;
   subClass?: string;
   title?: string;
+  /** Replaces the tile's label (e.g. "Return so far" → "Net APY" once a full day of data exists). */
+  label?: string;
 }
 
 /** Renders a row of stat tiles and returns a setter for their contents. */
@@ -39,6 +41,7 @@ function tiles(root: HTMLElement, defs: TileDef[]) {
     .join('');
   return (key: string, v: TileValue) => {
     const tile = $(root, `[data-t="${key}"]`);
+    if (v.label) $(tile, '.stat-label span').textContent = v.label;
     $(tile, '[data-v]').innerHTML = v.value;
     const aside = $(tile, '[data-x]');
     aside.innerHTML = v.aside ?? '';
@@ -54,24 +57,34 @@ function tiles(root: HTMLElement, defs: TileDef[]) {
   };
 }
 
-/** "extrapolated" tag next to an annualised headline number when the window is short. */
-const tag = (spanSec: number | null) =>
-  isExtrapolated(spanSec) ? ` <span class="tag" title="${esc(extrapolatedTitle(spanSec))}">extrapolated</span>` : '';
-
-/** Net APY tile contents shared by both strategies. */
-function netApyTile(
+/**
+ * Headline return tile. Under 24h of data it shows the realised return since launch ("+0.43% in 6h 30m") and the
+ * measured lending APY; the annualised net APY (lending + income) only appears once a full day is sampled.
+ */
+function returnTile(
   p: { netApy: number | null; lendingApy: number | null; incomeApy: number | null } | null,
   spanSec: number | null,
+  realised: { pct: number | null; earnedUsd: number; elapsedSec: number | null },
   incomeName: string,
 ): TileValue {
   const part = (v: number | null) => (v === null ? '—' : apyPct(v));
+  if (!isExtrapolated(spanSec) && p?.netApy != null) {
+    return {
+      label: 'Net APY',
+      value: apyPct(p.netApy),
+      sub: `<span class="num">${part(p.lendingApy)}</span> lending + <span class="num">${part(p.incomeApy)}</span> ${incomeName}`,
+      note: apyBasis(spanSec),
+      title: `Net APY = lending APY (measured from market indices) + ${incomeName} income over the trailing 24h, annualised.`,
+    };
+  }
+  const elapsed = realised.elapsedSec === null ? 'since launch' : `in ${span(realised.elapsedSec)}`;
+  const left = spanSec === null ? '' : ` Annualised APY in ${span(Math.max(0, FULL_WINDOW_SEC - spanSec))}.`;
   return {
-    value: p?.netApy == null ? MEASURING : `${apyPct(p.netApy)}${tag(spanSec)}`,
-    sub: p ? `<span class="num">${part(p.lendingApy)}</span> lending + <span class="num">${part(p.incomeApy)}</span> ${incomeName}` : 'lending + ' + incomeName,
-    note: apyBasis(spanSec),
-    title: `Net APY = lending APY (measured from market indices) + ${incomeName} income over the trailing window, annualised. ${
-      isExtrapolated(spanSec) ? extrapolatedTitle(spanSec) : ''
-    }`.trim(),
+    label: 'Return so far',
+    value: realisedHtml(realised.pct),
+    sub: `${elapsed} · <span class="num">${usd(realised.earnedUsd)}</span> ${incomeName}`,
+    note: `+ lending <span class="num">${part(p?.lendingApy ?? null)}</span> APY`,
+    title: `Realised return since the first deposit, not annualised. An annualised APY is shown once a full 24h of data is sampled — annualising a few hours of testnet flow would overstate it. Lending APY is measured from market indices.${left}`,
   };
 }
 
@@ -80,7 +93,7 @@ export function mountStats(root: HTMLElement): void {
     { key: 'tvl', label: 'Total value locked', icon: 'vault' },
     { key: 'earned', label: 'Earned since launch', icon: 'coins', hint: 'JIT flash-loan fees paid to the vault by the resolver. Measured, not annualised.' },
     { key: 'price', label: 'Share price', icon: 'earn', hint: 'USDC per ysUSDC. Rises as lending interest and JIT fees accrue.' },
-    { key: 'apy', label: 'Net APY', icon: 'percent' },
+    { key: 'apy', label: 'Return so far', icon: 'percent' },
   ]);
   store.subscribe(({ snapshot }) => {
     if (!snapshot) return;
@@ -109,7 +122,10 @@ export function mountStats(root: HTMLElement): void {
       sub: p?.sharePriceChangePct == null ? 'change since launch: measuring…' : `${signedHtml(p.sharePriceChangePct)} since first deposit`,
     });
 
-    set('apy', netApyTile(p, p?.spanSec ?? null, 'JIT fees'));
+    set(
+      'apy',
+      returnTile(p, p?.spanSec ?? null, { pct: p?.sharePriceChangePct ?? null, earnedUsd: earned, elapsedSec: p?.since ? snapshot.timestamp - p.since : null }, 'JIT fees'),
+    );
   });
 }
 
@@ -123,7 +139,7 @@ export function mountMmStats(root: HTMLElement): void {
       icon: 'scale',
       hint: 'Share value vs simply holding the USDC/WETH basket each share started with, at today’s ETH price. Isolates market-making skill from ETH price moves. Value-weighted over profiles.',
     },
-    { key: 'apy', label: 'Net APY', icon: 'percent' },
+    { key: 'apy', label: 'Return so far', icon: 'percent' },
   ]);
   store.subscribe(({ snapshot }) => {
     if (!snapshot) return;
@@ -148,7 +164,14 @@ export function mountMmStats(root: HTMLElement): void {
     });
 
     const lend = (v: number | null) => (v === null ? 'measuring…' : pct(v));
-    const t = netApyTile(b.performance, spanSec, 'spread');
+    const since = Math.min(...b.vaults.map((v) => v.performance?.since ?? Infinity));
+    // Spread income as a share of TVL: excludes ETH price moves, which "vs HODL" covers separately.
+    const t = returnTile(
+      b.performance,
+      spanSec,
+      { pct: tvl > 0 ? (earned / tvl) * 100 : null, earnedUsd: earned, elapsedSec: Number.isFinite(since) ? snapshot.timestamp - since : null },
+      'spread',
+    );
     t.title += ` Idle inventory lending: USDC ${lend(b.lendingApy.usdc)}, WETH ${lend(b.lendingApy.weth)}.`;
     set('apy', t);
   });
