@@ -13,7 +13,7 @@ import { mountScWallet } from './components/sc-wallet.ts';
 import { mountScExplainer, mountScMarkets, mountScStrategies } from './components/self-custody.ts';
 import { mountCarryStats, mountMmStats, mountScStats, mountStats } from './components/stats.ts';
 import { mountSwitcher } from './components/switcher.ts';
-import { mountTopbar } from './components/topbar.ts';
+import { mountWalletTile } from './components/wallet-tile.ts';
 import { mountWallet } from './components/wallet.ts';
 import { POLL, PROFILE_NAMES } from './config.ts';
 import { $, esc, short } from './format.ts';
@@ -25,8 +25,8 @@ import { store } from './store.ts';
 
 const app = $(document, '#app');
 app.innerHTML = `
-  <header class="topbar"></header>
   <main class="page" data-strategy="sc">
+    <p class="brand-line">YieldSolver</p>
     <div class="boot" data-boot role="status"></div>
     <div class="app-body" data-body hidden>
       <div class="banner" data-banner role="status" hidden></div>
@@ -127,7 +127,7 @@ function retry(): void {
 /** Skeleton of the page (switcher, hero, stat row, two columns) while the first snapshot loads. */
 const loadingHtml = `
   <div class="skel" aria-hidden="true">
-    <div class="skel-switch"><i></i><i></i><i></i><i></i></div>
+    <div class="skel-switch"><i></i><i></i><i></i><i></i><i></i></div>
     <div class="skel-hero"><i class="w-20"></i><i class="w-60 h-lg"></i><i class="w-80"></i></div>
     <div class="skel-stats">${'<div><i class="w-40"></i><i class="w-60 h-lg"></i><i class="w-80"></i></div>'.repeat(4)}</div>
     <div class="skel-cols"><div>${'<i></i>'.repeat(6)}</div><div>${'<i></i>'.repeat(4)}</div></div>
@@ -185,7 +185,6 @@ store.subscribe(({ snapshot }) => {
 /* ── Mount ──────────────────────────────── */
 
 installCopy();
-mountTopbar($(app, '.topbar'));
 mountScExplainer(m('sc-hero'));
 mountScStats($(app, '.stats[data-only="sc"]'));
 mountScMarkets(m('sc-markets'));
@@ -209,6 +208,10 @@ mountMmDeposit(m('deposit-b'));
 mountCarryDeposit(m('deposit-carry'));
 mountWallet(m('wallet'));
 mountSwitcher($(app, '.switcher'), (id) => (page.dataset.strategy = id));
+const walletSlot = document.createElement('div');
+walletSlot.className = 'switch-wallet';
+$(app, '.switcher').append(walletSlot);
+mountWalletTile(walletSlot);
 
 // Wallet changes refresh balances and the user's own intents right away.
 let lastAddr: string | null = null;
