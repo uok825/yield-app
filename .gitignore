@@ -11,6 +11,8 @@ contracts/cache
 contracts/broadcast/*/31337/
 contracts/broadcast/**/dry-run/
 contracts/.env
+contracts/deployments/31337.json
+contracts/broadcast/*/31337/
 
 # Editor / OS
 .vscode/*

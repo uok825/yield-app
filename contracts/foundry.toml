@@ -8,11 +8,21 @@ optimizer = true
 optimizer_runs = 200
 bytecode_hash = "none"
 fs_permissions = [{ access = "read-write", path = "./deployments" }]
+# 1inch LOP v4 / Fusion settlement are compiled exactly like upstream (via-IR, 1M runs); our contracts keep the
+# default pipeline.
+additional_compiler_profiles = [{ name = "oneinch", via_ir = true, optimizer_runs = 1000000 }]
+compilation_restrictions = [
+    { paths = "lib/limit-order-protocol/contracts/**", via_ir = true, optimizer_runs = 1000000 },
+    { paths = "lib/fusion-protocol/contracts/**", via_ir = true, optimizer_runs = 1000000 },
+    { paths = "src/external/**", via_ir = true, optimizer_runs = 1000000 },
+]
 remappings = [
     "forge-std/=lib/forge-std/src/",
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
     "@1inch/solidity-utils/=lib/solidity-utils/",
     "@1inch/aqua/=lib/aqua/src/",
+    "@1inch/limit-order-protocol-contract/=lib/limit-order-protocol/",
+    "@1inch/fusion-protocol/=lib/fusion-protocol/",
 ]
 
 [fuzz]

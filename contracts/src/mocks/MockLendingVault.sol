@@ -22,6 +22,12 @@ contract MockLendingVault is ERC4626 {
         if (interest > 0) MockERC20(asset()).mint(address(this), interest);
     }
 
+    /// @notice Simulates interest with 1e18 precision: grows assets by `rateWad / 1e18` (e.g. 1e12 = 0.0001%).
+    function accrueWad(uint256 rateWad) external {
+        uint256 interest = totalAssets() * rateWad / 1e18;
+        if (interest > 0) MockERC20(asset()).mint(address(this), interest);
+    }
+
     /// @notice Simulates borrowers taking `amount` of liquidity (cannot be withdrawn).
     function setBorrowed(uint256 amount) external {
         borrowed = amount;

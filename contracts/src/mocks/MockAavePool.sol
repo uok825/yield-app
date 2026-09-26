@@ -59,12 +59,21 @@ contract MockAToken {
     }
 
     function accrue(uint256 bps) external onlyPool {
+        _grow(bps * 1e14);
+    }
+
+    /// @dev Grows the liquidity index by `rateWad / 1e18` and mints the backing interest.
+    function _grow(uint256 rateWad) internal {
         uint256 supplyBefore = Math.mulDiv(scaledTotalSupply, liquidityIndex, RAY);
-        liquidityIndex = liquidityIndex * (10_000 + bps) / 10_000;
+        liquidityIndex = liquidityIndex * (1e18 + rateWad) / 1e18;
         uint256 supplyAfter = Math.mulDiv(scaledTotalSupply, liquidityIndex, RAY);
         if (supplyAfter > supplyBefore) {
             MockERC20(UNDERLYING_ASSET_ADDRESS).mint(address(this), supplyAfter - supplyBefore);
         }
+    }
+
+    function accrueWad(uint256 rateWad) external onlyPool {
+        _grow(rateWad);
     }
 
     function lockLiquidity(address to, uint256 amount) external onlyPool {
@@ -101,6 +110,17 @@ contract MockAavePool {
 
     function accrue(uint256 bps) external {
         aToken.accrue(bps);
+    }
+
+    /// @notice Simulates interest with 1e18 precision (see MockLendingVault.accrueWad).
+    function accrueWad(uint256 rateWad) external {
+        aToken.accrueWad(rateWad);
+    }
+
+    /// @notice Aave V3 `IPool.getReserveNormalizedIncome`: the supply index in ray, used by keepers to measure APY.
+    function getReserveNormalizedIncome(address asset) external view returns (uint256) {
+        if (asset != address(underlying)) revert UnknownReserve();
+        return aToken.liquidityIndex();
     }
 
     /// @notice Moves `amount` of cash out of the reserve to `to`, like a borrower would.

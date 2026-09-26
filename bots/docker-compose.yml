@@ -1,0 +1,41 @@
+# One image, one service per bot. Each bot owns its key (no nonce sharing).
+#   cp .env.example .env   # fill keys + RPC
+#   docker compose up -d --build
+x-bot: &bot
+  build: .
+  env_file: .env
+  restart: unless-stopped
+  environment:
+    RELAYER_URL: http://relayer:8080
+    HEALTH_PORT: "9100"
+  volumes:
+    - ../contracts/deployments:/app/contracts/deployments:ro
+    - state:/app/state
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9100').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+
+services:
+  relayer:
+    <<: *bot
+    command: ["relayer"]
+    ports: ["8080:8080"]
+  sim:
+    <<: *bot
+    command: ["sim"]
+  keeper:
+    <<: *bot
+    command: ["keeper"]
+  resolver:
+    <<: *bot
+    command: ["resolver"]
+    depends_on: [relayer]
+  maker:
+    <<: *bot
+    command: ["maker"]
+    depends_on: [relayer]
+
+volumes:
+  state:

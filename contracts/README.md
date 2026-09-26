@@ -17,6 +17,7 @@ Two strategies on 1inch Aqua, sharing one resolver that fills 1inch Fusion / LOP
 | `YieldResolver` | Taker for both. `execute` borrows JIT liquidity (A); `executeSwap` buys from inventory (B). Runs calls against whitelisted targets (LOP / Fusion settlement, routers), pays the vault and keeps the profit. Loss-making runs revert. |
 | `adapters/ERC4626Adapter` | Morpho (MetaMorpho) vaults and Fluid fTokens. |
 | `adapters/AaveV3Adapter` | Aave V3 pool + aToken. |
+| `external/FusionContracts.sol` | Pulls the official 1inch LimitOrderProtocol v4 and Fusion `SimpleSettlement` (unmodified submodules, compiled like upstream with via-IR) so they can be deployed where 1inch has none. |
 | `mocks/*` | Test USDC/WETH, ERC-4626 market, Aave pool, Chainlink-style oracle, fixed-price router, order book. Deployed only in mock mode (testnets). |
 
 Allocation decisions (APY × trust score) are taken off-chain by the keeper; the contracts enforce the invariants.
@@ -30,14 +31,17 @@ BASE_RPC_URL=https://mainnet.base.org forge test --mc "Base.*Fork"  # real Aqua,
 
 ## Deploy to Base Sepolia
 
-Aqua isn't on Base Sepolia, so the script deploys an unmodified copy of 1inch Aqua plus mock markets, a settable
-mock ETH/USD oracle (owner = deployer, `setAnswer`) and a mock order book.
+Aqua and 1inch Fusion aren't on Base Sepolia, so the script deploys unmodified copies of 1inch Aqua, the Limit Order
+Protocol v4 and the Fusion `SimpleSettlement`, plus mock markets, a settable mock ETH/USD oracle (owner = deployer)
+and a mock router. Use separate keeper / operator keys: the bots in [`../bots`](../bots) run as those roles.
+`--slow` sends one transaction at a time (some RPCs drop parts of large batches).
 
 ```bash
 cp .env.example .env && source .env
 cast wallet import deployer --interactive   # once
-forge script script/Deploy.s.sol --rpc-url base_sepolia --account deployer --broadcast --verify
-forge script script/Demo.s.sol   --rpc-url base_sepolia --account deployer --broadcast   # A: JIT fill · B: fills from stock
+KEEPER=<keeper addr> OPERATOR=<operator addr> \
+  forge script script/Deploy.s.sol --rpc-url base_sepolia --account deployer --broadcast --slow --verify
+forge script script/Demo.s.sol   --rpc-url base_sepolia --account deployer --broadcast --slow   # optional one-shot demo
 ```
 
 Addresses are written to `deployments/<chainId>.json`. If `OWNER` differs from the deployer, the new owner must call

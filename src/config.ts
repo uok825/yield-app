@@ -39,8 +39,8 @@ export const PROFILES: { id: ProfileId; name: string; target: number; seedUsd: n
 
 /** Mirrors the Solidity parameters (bps). skewBps ≤ spreadBps: never trades worse than oracle. */
 export const MM = {
-  spreadBps: 20,
-  skewBps: 15,
+  spreadBps: 10,
+  skewBps: 8,
   bandBps: 500, // ±5pp around the USDC target
   maxFillShare: 0.2, // a fill may not exceed 20% of the pool's value
   keeperCostBps: 5, // simulated DEX cost of a keeper rebalance

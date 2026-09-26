@@ -97,3 +97,23 @@ contract AdaptersTest is Test {
         new AaveV3Adapter(vault, IAaveV3Pool(address(other)), IAaveV3AToken(address(pool.aToken())));
     }
 }
+
+contract MockAccrualTest is Test {
+    function test_accrueWad_smallRates() public {
+        MockERC20 usdc = new MockERC20("USD Coin", "USDC", 6);
+        MockLendingVault market = new MockLendingVault(usdc, "m", "m");
+        MockAavePool pool = new MockAavePool(usdc);
+        usdc.mint(address(this), 2_000_000e6);
+        usdc.approve(address(market), type(uint256).max);
+        usdc.approve(address(pool), type(uint256).max);
+        market.deposit(1_000_000e6, address(this));
+        pool.supply(address(usdc), 1_000_000e6, address(this), 0);
+
+        // ~6.5% APY for one minute ≈ 1.237e-7
+        market.accrueWad(123_700_000_000);
+        pool.accrueWad(123_700_000_000);
+        assertEq(market.totalAssets(), 1_000_000e6 + 123_700);
+        assertApproxEqAbs(pool.aToken().balanceOf(address(this)), 1_000_000e6 + 123_700, 1);
+        assertEq(pool.getReserveNormalizedIncome(address(usdc)), 1e27 + 123_700_000_000 * 1e9);
+    }
+}

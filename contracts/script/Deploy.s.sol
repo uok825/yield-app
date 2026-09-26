@@ -38,16 +38,21 @@ import {MockOrderBook} from "../src/mocks/MockOrderBook.sol";
 ///  Live mode (`USDC` set): real markets from env — MORPHO_VAULT, FLUID_VAULT, AAVE_POOL + AAVE_ATOKEN for A;
 ///  WETH, ORACLE (defaults to Chainlink ETH/USD on Base), AAVE_WETH_ATOKEN for B. Without WETH, B is skipped.
 ///
+///  1inch Fusion: mock mode deploys the official LOP v4 + SimpleSettlement (unmodified submodules). Live mode on
+///  Base uses the canonical deployments (override with LIMIT_ORDER_PROTOCOL / FUSION_SETTLEMENT).
+///
 ///  Aqua: `AQUA` if set, else the canonical 1inch deployment if it has code on this chain, else a fresh one.
 ///
-///  Optional: OWNER, KEEPER, OPERATOR (default: deployer), RESERVE_BPS (1500), FLASH_FEE_BPS (5), SPREAD_BPS (20),
-///  SKEW_BPS (15), MAX_TRADE_BPS (2000), BAND_BPS (500), DEPOSIT_FEE_BPS (5), PRICE_MAX_AGE (3600; 365 days in
+///  Optional: OWNER, KEEPER, OPERATOR (default: deployer), RESERVE_BPS (1500), FLASH_FEE_BPS (5), SPREAD_BPS (10),
+///  SKEW_BPS (8), MAX_TRADE_BPS (2000), BAND_BPS (500), DEPOSIT_FEE_BPS (5), PRICE_MAX_AGE (3600; 365 days in
 ///  mock mode), MAX_REBALANCE_LOSS_BPS (50).
 ///
 ///    forge script script/Deploy.s.sol --rpc-url base_sepolia --account <keystore> --broadcast --verify
 contract Deploy is Script {
     address internal constant CANONICAL_AQUA = 0x1111113CCf1426A8E30e2bfF5E005d929bF6a90a;
     address internal constant CHAINLINK_ETH_USD_BASE = 0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70;
+    address internal constant LOP_BASE = 0x111111125421cA6dc452d289314280a0f8842A65;
+    address internal constant FUSION_SETTLEMENT_BASE = 0x2Ad5004c60e16E54d5007C80CE329Adde5B51Ef5;
 
     struct Deployment {
         bool mock;
@@ -74,6 +79,10 @@ contract Deploy is Script {
         address resolver;
         address router;
         address orderBook;
+        // 1inch Fusion (LOP v4 + SimpleSettlement)
+        address limitOrderProtocol;
+        address fusionSettlement;
+        address fusionAccessToken;
     }
 
     struct Params {
@@ -131,8 +140,8 @@ contract Deploy is Script {
         p.operator = vm.envOr("OPERATOR", msg.sender);
         p.reserveBps = uint16(vm.envOr("RESERVE_BPS", uint256(1500)));
         p.feeBps = uint16(vm.envOr("FLASH_FEE_BPS", uint256(5)));
-        p.spreadBps = uint16(vm.envOr("SPREAD_BPS", uint256(20)));
-        p.skewBps = uint16(vm.envOr("SKEW_BPS", uint256(15)));
+        p.spreadBps = uint16(vm.envOr("SPREAD_BPS", uint256(10)));
+        p.skewBps = uint16(vm.envOr("SKEW_BPS", uint256(8)));
         p.maxTradeBps = uint16(vm.envOr("MAX_TRADE_BPS", uint256(2000)));
         p.bandBps = uint16(vm.envOr("BAND_BPS", uint256(500)));
         p.depositFeeBps = uint16(vm.envOr("DEPOSIT_FEE_BPS", uint256(5)));
@@ -166,6 +175,14 @@ contract Deploy is Script {
         router.setPrice(d.usdc, d.weth, uint256(1e30) / 3000); // 3000 USDC / WETH
         router.setPrice(d.weth, d.usdc, 3006e6); // +0.2% on the way back
         d.orderBook = address(new MockOrderBook());
+
+        // Official, unmodified 1inch LOP v4 + Fusion SimpleSettlement (1inch has no testnet deployment).
+        d.limitOrderProtocol = deployCode("LimitOrderProtocol.sol:LimitOrderProtocol", abi.encode(d.weth));
+        d.fusionAccessToken = address(new MockERC20("Fusion Access Token", "FAT", 0));
+        d.fusionSettlement = deployCode(
+            "SimpleSettlement.sol:SimpleSettlement",
+            abi.encode(d.limitOrderProtocol, d.fusionAccessToken, d.weth, msg.sender)
+        );
     }
 
     function _readLive(Deployment memory d) internal view {
@@ -177,6 +194,8 @@ contract Deploy is Script {
         d.aaveWethAToken = vm.envOr("AAVE_WETH_ATOKEN", address(0));
         d.aaveWethPool = d.aaveWethAToken == address(0) ? address(0) : d.aavePool;
         d.oracle = vm.envOr("ORACLE", block.chainid == 8453 ? CHAINLINK_ETH_USD_BASE : address(0));
+        d.limitOrderProtocol = vm.envOr("LIMIT_ORDER_PROTOCOL", block.chainid == 8453 ? LOP_BASE : address(0));
+        d.fusionSettlement = vm.envOr("FUSION_SETTLEMENT", block.chainid == 8453 ? FUSION_SETTLEMENT_BASE : address(0));
     }
 
     // ─── Strategy A ──────────────────────────────────────────────────────────
@@ -266,8 +285,9 @@ contract Deploy is Script {
 
     function _wireResolver(Deployment memory d) internal {
         YieldResolver resolver = YieldResolver(payable(d.resolver));
-        address[2] memory targets = [d.router, d.orderBook];
-        for (uint256 i; i < 2; ++i) {
+        // The LOP pulls the taker asset from the resolver, so it needs allowances like the routers.
+        address[3] memory targets = [d.router, d.orderBook, d.limitOrderProtocol];
+        for (uint256 i; i < 3; ++i) {
             if (targets[i] == address(0)) continue;
             resolver.setTarget(targets[i], true);
             resolver.approveToken(IERC20(d.usdc), targets[i], type(uint256).max);
@@ -314,6 +334,8 @@ contract Deploy is Script {
             console2.log(string.concat("[B] ", PROFILE_NAMES[i]), d.inventoryVaults[i]);
         }
         if (d.orderBook != address(0)) console2.log("MockOrderBook    ", d.orderBook);
+        console2.log("LimitOrderProtocol", d.limitOrderProtocol);
+        console2.log("FusionSettlement ", d.fusionSettlement);
     }
 
     function _write(Deployment memory d, Params memory p) internal {
@@ -325,6 +347,10 @@ contract Deploy is Script {
         vm.serializeAddress(k, "resolver", d.resolver);
         vm.serializeAddress(k, "router", d.router);
         vm.serializeAddress(k, "orderBook", d.orderBook);
+        vm.serializeAddress(k, "limitOrderProtocol", d.limitOrderProtocol);
+        vm.serializeAddress(k, "fusionSettlement", d.fusionSettlement);
+        vm.serializeAddress(k, "fusionAccessToken", d.fusionAccessToken);
+        vm.serializeUint(k, "deployBlock", block.number);
         // Strategy A
         vm.serializeAddress(k, "vault", d.vault);
         vm.serializeAddress(k, "app", d.app);
