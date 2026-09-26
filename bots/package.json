@@ -22,7 +22,8 @@
     "status": "tsx src/main.ts status",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "e2e": "tsx scripts/e2e.ts"
+    "e2e": "tsx scripts/e2e.ts",
+    "multibaas:link": "tsx scripts/multibaas-link.ts"
   },
   "dependencies": {
     "tsx": "^4.19.0",
