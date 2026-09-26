@@ -98,7 +98,8 @@ export function revertReason(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-const TRANSIENT = /nonce too low|replacement transaction underpriced|already known|timeout|ECONNRESET|fetch failed|429|503/i
+const STALE_READ_RETRIES = 4
+const TRANSIENT = /nonce too low|replacement transaction underpriced|already known|timeout|ECONNRESET|fetch failed|HTTP request failed|rate limit|429|503/i
 
 /**
  * Simulates, sends and waits for a contract write. Reverts surface as decoded errors before anything is broadcast.
@@ -115,8 +116,26 @@ export async function write<
   label = String(params.functionName),
 ): Promise<TransactionReceipt> {
   for (let attempt = 1; ; attempt++) {
+    let request
     try {
-      const { request } = await ctx.client.simulateContract({ ...(params as any), account: wallet.account })
+      ;({ request } = await ctx.client.simulateContract({ ...(params as any), account: wallet.account }))
+    } catch (err) {
+      // Load-balanced RPCs can answer from a node a block or two behind our last receipt (e.g. an approval
+      // that just mined). Re-simulate a few times before treating the revert as real; nothing is broadcast yet.
+      if (attempt < STALE_READ_RETRIES) {
+        log.debug(`${label}: simulation failed, retrying in case of a lagging RPC node`, { attempt, reason: revertReason(err) })
+        await sleep(1_500 * attempt)
+        continue
+      }
+      throw new Error(`${label} failed: ${revertReason(err)}`)
+    }
+    try {
+      // Headroom over the estimate: a lagging RPC node can estimate against older state (e.g. a storage slot that is
+      // still zero there costs 20k more to write). Gas on Base is cheap; out-of-gas reverts are not.
+      if (params.gas === undefined) {
+        const estimate = await ctx.client.estimateContractGas({ ...(params as any), account: wallet.account })
+        ;(request as any).gas = (estimate * 13n) / 10n + 25_000n
+      }
       const hash = await wallet.writeContract(request as any)
       const receipt = await ctx.client.waitForTransactionReceipt({ hash, timeout: 120_000 })
       if (receipt.status !== 'success') throw new Error(`${label} reverted on-chain: ${ctx.txUrl(hash)}`)

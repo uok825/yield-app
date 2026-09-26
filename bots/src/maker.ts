@@ -10,7 +10,7 @@ import { type Address, type Hex, type LocalAccount, formatUnits, maxUint256, par
 import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts'
 
 import { mockERC20Abi } from './abis.ts'
-import { type Context, erc20Abi, write } from './chain.ts'
+import { type Context, erc20Abi, sleep, write } from './chain.ts'
 import { RATE_BUMP_BASE, lopDomain, newFusionOrder, signOrder } from './fusion.ts'
 import { logger } from './log.ts'
 import { count, runEvery } from './loop.ts'
@@ -78,19 +78,27 @@ export async function setupMakers(ctx: Context, gasEth = parseEther(process.env.
 async function ensureFunds(ctx: Context, m: Maker, token: Address, amount: bigint) {
   const wallet = ctx.walletFor(m.key)
   const owner = m.account.address
-  const balance = await ctx.client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] })
+  const read = () =>
+    Promise.all([
+      ctx.client.readContract({ address: token, abi: erc20Abi, functionName: 'balanceOf', args: [owner] }),
+      ctx.client.readContract({ address: token, abi: erc20Abi, functionName: 'allowance', args: [owner, ctx.d.limitOrderProtocol] }),
+    ])
+  let [balance, allowance] = await read()
+  let wrote = false
   if (balance < amount) {
     if (!ctx.d.mock) throw new Error(`maker ${owner} lacks ${amount - balance} of ${token} (live tokens cannot be minted)`)
     await write(ctx, wallet, { address: token, abi: mockERC20Abi, functionName: 'mint', args: [owner, amount * 5n] }, 'mint')
+    wrote = true
   }
-  const allowance = await ctx.client.readContract({
-    address: token,
-    abi: erc20Abi,
-    functionName: 'allowance',
-    args: [owner, ctx.d.limitOrderProtocol],
-  })
   if (allowance < amount) {
     await write(ctx, wallet, { address: token, abi: erc20Abi, functionName: 'approve', args: [ctx.d.limitOrderProtocol, maxUint256] }, 'approve')
+    wrote = true
+  }
+  // Load-balanced RPCs may still serve the pre-transaction state; don't hand the relayer an order it can't verify yet.
+  for (let i = 0; wrote && i < 10; i++) {
+    ;[balance, allowance] = await read()
+    if (balance >= amount && allowance >= amount) return
+    await sleep(1_000)
   }
 }
 

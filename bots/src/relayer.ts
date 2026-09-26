@@ -128,17 +128,25 @@ export async function validateOrder(ctx: Context, body: unknown): Promise<OrderR
   if (order.deadline <= now) throw new ValidationError('order already expired')
 
   const makerAsset = getAddress(order.makerAsset.toString())
-  const [balance, allowance] = await Promise.all([
-    ctx.client.readContract({ address: makerAsset, abi: erc20Abi, functionName: 'balanceOf', args: [maker] }),
-    ctx.client.readContract({
-      address: makerAsset,
-      abi: erc20Abi,
-      functionName: 'allowance',
-      args: [maker, ctx.d.limitOrderProtocol],
-    }),
-  ])
-  if (balance < order.makingAmount) throw new ValidationError('maker balance below makingAmount')
-  if (allowance < order.makingAmount) throw new ValidationError('maker has not approved the LimitOrderProtocol')
+  // Re-read a few times before rejecting: makers often approve/fund right before posting, and a load-balanced RPC
+  // can still answer from a node that hasn't seen that block.
+  for (let attempt = 1; ; attempt++) {
+    const [balance, allowance] = await Promise.all([
+      ctx.client.readContract({ address: makerAsset, abi: erc20Abi, functionName: 'balanceOf', args: [maker] }),
+      ctx.client.readContract({
+        address: makerAsset,
+        abi: erc20Abi,
+        functionName: 'allowance',
+        args: [maker, ctx.d.limitOrderProtocol],
+      }),
+    ])
+    if (balance >= order.makingAmount && allowance >= order.makingAmount) break
+    if (attempt >= 3) {
+      if (balance < order.makingAmount) throw new ValidationError('maker balance below makingAmount')
+      throw new ValidationError('maker has not approved the LimitOrderProtocol')
+    }
+    await new Promise((r) => setTimeout(r, 2_000))
+  }
 
   const t = Date.now()
   return {
