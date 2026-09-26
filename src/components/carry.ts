@@ -3,7 +3,8 @@ import type { Carry, CarryEvent, CarryEventKind, CarrySink, Snapshot } from '../
 import { addrUrl, txUrl } from '../chain.ts';
 import { $, ago, esc, num, pct, short, usd } from '../format.ts';
 import { store } from '../store.ts';
-import { apyText, icon, marketKey } from './self-custody.ts';
+import { emptyState, ext, icon, type IconName, sectionHead } from '../icons.ts';
+import { apyText, marketKey, stepHtml } from './self-custody.ts';
 import { MEASURING } from './yield.ts';
 
 /* ── Shared helpers ─────────────────────── */
@@ -34,23 +35,19 @@ function sinkTitle(address: string, snap: Snapshot): string {
 
 /** How carry works in three steps, plus the guardrails the contract enforces (thresholds from the snapshot). */
 export function mountCarryExplainer(root: HTMLElement): void {
-  const step = (n: number, k: Parameters<typeof icon>[0], title: string, body: string) => `
-    <li class="sc-step">
-      <span class="step-badge"><span class="step-n">${n}</span>${icon(k)}</span>
-      <div><b>${title}</b><p>${body}</p></div>
-    </li>`;
+  const step = (n: number, k: IconName, title: string, body: string) => stepHtml(n, k, title, body);
   root.innerHTML = `
     <div class="sc-hero-head">
-      <span class="eyebrow">Conditional carry · ETH</span>
+      <span class="eyebrow">${icon('earn')}Conditional carry · ETH</span>
       <h1>ETH that borrows only when it pays.</h1>
-      <p class="muted">Deposit ETH and it stays as Aave collateral. The keeper borrows USDC against it only while the best sink APY minus the borrow APR beats the cost of getting in and out — and unwinds on its own when that spread disappears.</p>
+      <p class="lede">Deposit ETH and it stays as Aave collateral. The keeper borrows USDC against it only while the best sink APY minus the borrow APR beats the cost of getting in and out — and unwinds on its own when that spread disappears.</p>
     </div>
     <ol class="sc-steps">
       ${step(1, 'supply', 'Deposit ETH', 'WETH is supplied to Aave as collateral and stays there. You hold <em>ycWETH</em> vault shares.')}
       ${step(2, 'earn', 'Borrow only when it pays', 'While <em>best sink APY − borrow APR</em> clears the entry bar and the expected profit covers gas several times over, USDC is borrowed up to the target LTV and parked in the best sink.')}
       ${step(3, 'exit', 'Exit automatically', 'When the spread drops below the exit bar for several checks in a row, the keeper withdraws, repays and harvests the profit back into ETH.')}
     </ol>
-    <p class="custody-line carry-guard">${icon('shield')}<span data-guard></span></p>`;
+    <p class="custody-line carry-guard">${icon('shield', 20)}<span data-guard></span></p>`;
 
   const guard = $(root, '[data-guard]');
   let key = '';
@@ -72,13 +69,12 @@ export function mountCarryExplainer(root: HTMLElement): void {
 /** The keeper's latest decision and the rules it applies. */
 export function mountCarryDecision(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Keeper decision</h2>
-        <p class="muted">Re-evaluated every tick. The position only changes when these rules say so.</p>
-      </div>
-      <span class="head-link muted" data-ago></span>
-    </header>
+    ${sectionHead({
+      icon: 'cpu',
+      title: 'Keeper decision',
+      desc: 'Re-evaluated every tick. The position only changes when these rules say so.',
+      aside: `<span class="head-meta">${icon('clock')}<span data-ago></span></span>`,
+    })}
     <div class="dec-now">
       <span class="status" data-status></span>
       <p class="dec-reason" data-reason></p>
@@ -97,8 +93,8 @@ export function mountCarryDecision(root: HTMLElement): void {
     if (!c) return;
     const d = c.decision;
     const on = (d?.status ?? c.status) === 'on';
-    status.className = `status ${on ? 'is-done' : ''}`;
-    status.textContent = on ? 'ON' : 'OFF · waiting';
+    status.className = `status ${on ? 'is-live' : ''}`;
+    status.textContent = on ? 'On' : 'Off · waiting';
     reason.innerHTML = d
       ? `${esc(d.reason)}${d.executed.length ? ` <span class="muted">· executed ${esc(d.executed.join(', '))}</span>` : ''}`
       : '<span class="muted">No decision yet: the keeper hasn’t run a carry tick.</span>';
@@ -126,13 +122,12 @@ export function mountCarryDecision(root: HTMLElement): void {
 /** LTV meter (current vs target / max / deleverage) and the sinks table with the borrow APR as reference. */
 export function mountCarryPosition(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Where the money is</h2>
-        <p class="muted">ETH sits on Aave as collateral. Borrowed USDC only ever goes to a whitelisted ERC-4626 sink.</p>
-      </div>
-      <a class="head-link num" data-vault target="_blank" rel="noopener"></a>
-    </header>
+    ${sectionHead({
+      icon: 'gauge',
+      title: 'Where the money is',
+      desc: 'ETH sits on Aave as collateral. Borrowed USDC only ever goes to a whitelisted ERC-4626 sink.',
+      aside: '<a class="head-link ext" data-vault target="_blank" rel="noopener"></a>',
+    })}
     <div class="ltv-head"><span class="muted">Loan-to-value</span><span class="num" data-ltv></span></div>
     <div class="ltv" role="img" data-meter>
       <i class="ltv-fill" data-fill></i>
@@ -162,7 +157,7 @@ export function mountCarryPosition(root: HTMLElement): void {
     const c = snapshot?.carry;
     if (!c) return;
     vault.href = addrUrl(c.vault);
-    vault.textContent = `CarryVault ${short(c.vault)} ↗`;
+    vault.innerHTML = `CarryVault <span class="mono">${short(c.vault)}</span>${icon('external')}`;
 
     // LTV meter on a 0 … (deleverage + margin) scale.
     const scale = Math.max(50, Math.ceil((Math.max(c.deleverageLtvPct, c.ltvPct) + 10) / 10) * 10);
@@ -196,7 +191,7 @@ export function mountCarryPosition(root: HTMLElement): void {
       <div class="sink-row${isBest ? ' is-best' : ''}" role="row">
         <span role="cell" class="alloc-name">
           <i class="swatch c-${marketKey(title)}"></i>
-          <span><b>${esc(title)}${isBest ? ' <span class="pill pill-pos">best</span>' : ''}</b><small><a class="muted" href="${addrUrl(s.address)}" target="_blank" rel="noopener">${esc(s.name)}<span class="hide-sm"> ${short(s.address)}</span></a></small></span>
+          <span><b>${esc(title)}${isBest ? ' <span class="pill pill-accent">Best</span>' : ''}</b><small>${ext(addrUrl(s.address), `${esc(s.name)}<span class="hide-sm mono"> ${short(s.address)}</span>`, 'muted')}</small></span>
         </span>
         <span role="cell" class="r num${held ? '' : ' muted'}">${usd(s.valueUsd, 0)}<small class="muted hide-sm">cap ${usd(s.capUsd, 0)}</small></span>
         <span role="cell" class="r num hide-sm">${apyText(s.apy)}</span>
@@ -207,7 +202,7 @@ export function mountCarryPosition(root: HTMLElement): void {
       })
       .join('');
     const lender = c.creditMarket ? 'credit market' : 'Aave V3';
-    body.innerHTML = `${rows || '<p class="empty muted">No sinks whitelisted yet.</p>'}
+    body.innerHTML = `${rows || emptyState('No sinks whitelisted yet.')}
       <div class="sink-row sink-ref" role="row">
         <span role="cell" class="alloc-name"><i class="swatch c-reserve"></i><span><b>Borrow APR</b><small class="muted">USDC · ${lender}<span class="hide-sm"> · what the carry pays</span></small></span></span>
         <span role="cell" class="r num muted">−${usd(c.debtUsd, 0)}</span>
@@ -266,13 +261,12 @@ function eventDetail(e: CarryEvent, snap: Snapshot): string {
 /** Recent CarryVault events with explorer links. */
 export function mountCarryActivity(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Carry activity</h2>
-        <p class="muted">Every move the vault made on-chain: opening and closing the carry, rotating sinks, deleveraging and harvesting profit into ETH.</p>
-      </div>
-      <span class="head-link muted" data-counts></span>
-    </header>
+    ${sectionHead({
+      icon: 'history',
+      title: 'Carry activity',
+      desc: 'Every move the vault made on-chain: opening and closing the carry, rotating sinks, deleveraging and harvesting profit into ETH.',
+      aside: '<span class="head-meta" data-counts></span>',
+    })}
     <ul class="ev-list"></ul>`;
 
   const list = $(root, '.ev-list');
@@ -289,11 +283,11 @@ export function mountCarryActivity(root: HTMLElement): void {
       <li class="ev">
         <span class="status ${KIND_CLASS[e.kind] ?? ''}">${KIND_LABEL[e.kind] ?? esc(e.kind)}</span>
         <span class="ev-detail">${eventDetail(e, snapshot!)}</span>
-        <span class="ev-block muted num">#${esc(e.block)}</span>
-        <a class="tx-link" href="${txUrl(e.tx)}" target="_blank" rel="noopener" aria-label="View ${esc(e.kind)} transaction">Tx ↗</a>
+        <span class="ev-block muted num">${esc(Number(e.block).toLocaleString('en-US'))}</span>
+        <a class="tx-link" href="${txUrl(e.tx)}" target="_blank" rel="noopener" aria-label="View ${esc(e.kind)} transaction" title="View on Basescan">Tx${icon('external')}</a>
       </li>`,
           )
           .join('')
-      : `<li class="empty muted">No carry moves yet. The keeper only borrows once the spread beats the costs.</li>`;
+      : emptyState('No carry moves yet. The keeper only borrows once the spread beats the costs.', 'inbox', 'li');
   });
 }

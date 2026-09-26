@@ -2,6 +2,7 @@
 import type { ScMarket, ScStrategy, Snapshot } from '../api.ts';
 import { addrUrl } from '../chain.ts';
 import { $, esc, num, pct, short, usd } from '../format.ts';
+import { emptyState, ext, icon, type IconName, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 import { MEASURING } from './yield.ts';
 
@@ -14,47 +15,40 @@ export const apyText = (apy: number | null) => (apy === null ? MEASURING : `<spa
 /** "70 / 30" for a targetStableBps. */
 export const splitLabel = (bps: number) => `${bps / 100} / ${100 - bps / 100}`;
 
-const ICONS = {
-  supply: `<path d="M8 2.5v8M4.5 7 8 10.5 11.5 7"/><path d="M2.5 13.5h11"/>`,
-  commit: `<rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="m5.5 8 1.8 1.8 3.2-3.4"/>`,
-  earn: `<path d="M2.5 11.5 6 8l2.5 2.5 5-5"/><path d="M10 5.5h3.5V9"/>`,
-  lock: `<rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/>`,
-  exit: `<path d="M9.5 2.5h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-3"/><path d="M10 8H2.5M5 5.5 2.5 8 5 10.5"/>`,
-  shield: `<path d="M8 1.5 2.75 3.5v4c0 3.1 2.2 5.9 5.25 7 3.05-1.1 5.25-3.9 5.25-7v-4L8 1.5Z"/><path d="m5.6 8.1 1.7 1.7 3.1-3.3"/>`,
-};
-export const icon = (k: keyof typeof ICONS, cls = 'ico') => `<svg class="${cls}" viewBox="0 0 16 16" aria-hidden="true">${ICONS[k]}</svg>`;
+/** One "how it works" step: icon, step number, title and body. Shared with the carry explainer. */
+export const stepHtml = (n: number, k: IconName, title: string, body: string) => `
+    <li class="sc-step">
+      <span class="step-top">${icon(k, 20, 'step-ico')}<span class="step-n">Step ${n}</span></span>
+      <b>${title}</b>
+      <p>${body}</p>
+    </li>`;
 
 /** How it works, in three steps, plus the custody guarantee. Static. */
 export function mountScExplainer(root: HTMLElement): void {
-  const step = (n: number, k: keyof typeof ICONS, title: string, body: string) => `
-    <li class="sc-step">
-      <span class="step-badge"><span class="step-n">${n}</span>${icon(k)}</span>
-      <div><b>${title}</b><p>${body}</p></div>
-    </li>`;
+  const step = (n: number, k: IconName, title: string, body: string) => stepHtml(n, k, title, body);
   root.innerHTML = `
     <div class="sc-hero-head">
-      <span class="eyebrow">Self-custody · Aqua-native</span>
+      <span class="eyebrow">${icon('shield')}Self-custody · Aqua-native</span>
       <h1>Your tokens stay in your wallet.</h1>
-      <p class="muted">Lend on Morpho, Fluid or Aave the usual way and keep the shares. Commit them through 1inch Aqua and the same liquidity also earns from Fusion fills — without a vault, a deposit or a withdrawal queue.</p>
+      <p class="lede">Lend on Morpho, Fluid or Aave the usual way and keep the shares. Commit them through 1inch Aqua and the same liquidity also earns from Fusion fills — without a vault, a deposit or a withdrawal queue.</p>
     </div>
     <ol class="sc-steps">
       ${step(1, 'supply', 'Supply to a market', 'Deposit USDC or WETH into Morpho, Fluid or Aave. The interest-bearing shares land in <em>your</em> wallet.')}
       ${step(2, 'commit', 'Commit via Aqua', 'Approve Aqua once per market, then one <span class="num">ship</span> transaction records a budget. Nothing is transferred.')}
       ${step(3, 'earn', 'Earn on both sides', 'A keeper moves your shares to the best-paying market; the resolver uses them for 1inch Fusion intents; fees come back to your wallet as shares.')}
     </ol>
-    <p class="custody-line">${icon('lock')}<span><b>YieldSolver never holds your tokens;</b> Aqua only lets the app move them inside a single transaction that must return them (plus fees) to your wallet. Stop any time with <span class="num">dock</span>; withdraw straight from the market.</span></p>`;
+    <p class="custody-line">${icon('lock', 20)}<span><b>YieldSolver never holds your tokens;</b> Aqua only lets the app move them inside a single transaction that must return them (plus fees) to your wallet. Stop any time with <span class="num">dock</span>; withdraw straight from the market.</span></p>`;
 }
 
 /** Listed lending markets with live APYs and how much wallet liquidity sits in each. */
 export function mountScMarkets(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Lending markets</h2>
-        <p class="muted">ERC-4626 markets a strategy can list. The keeper moves each wallet’s shares between markets of the same asset toward the best APY.</p>
-      </div>
-      <a class="head-link num" data-app target="_blank" rel="noopener"></a>
-    </header>
+    ${sectionHead({
+      icon: 'layers',
+      title: 'Lending markets',
+      desc: 'ERC-4626 markets a strategy can list. The keeper moves each wallet’s shares between markets of the same asset toward the best APY.',
+      aside: '<a class="head-link ext" data-app target="_blank" rel="noopener"></a>',
+    })}
     <div class="bar" role="img" aria-label="Wallet liquidity by market"></div>
     <div class="alloc-list" role="table" aria-label="Lending markets">
       <div class="alloc-row alloc-headrow" role="row">
@@ -74,7 +68,7 @@ export function mountScMarkets(root: HTMLElement): void {
     const sc = snapshot?.selfCustody;
     if (!sc) return;
     appLink.href = addrUrl(sc.app);
-    appLink.textContent = `AquaYieldApp ${short(sc.app)} ↗`;
+    appLink.innerHTML = `AquaYieldApp <span class="mono">${short(sc.app)}</span>${icon('external')}`;
     const held = (m: ScMarket) =>
       sc.strategies.reduce((s, st) => s + st.positions.filter((p) => p.market.toLowerCase() === m.address.toLowerCase()).reduce((x, p) => x + p.usd, 0), 0);
     const rows = sc.markets.map((m) => ({ m, usd: held(m) }));
@@ -91,7 +85,7 @@ export function mountScMarkets(root: HTMLElement): void {
       <div class="alloc-row" role="row">
         <span role="cell" class="alloc-name">
           <i class="swatch c-${marketKey(r.m.name)}"></i>
-          <span><b>${esc(r.m.name)} <span class="asset-tag">${r.m.asset}</span></b><small><a class="muted" href="${addrUrl(r.m.address)}" target="_blank" rel="noopener">${esc(r.m.symbol)}<span class="hide-sm"> ${short(r.m.address)}</span></a></small></span>
+          <span><b>${esc(r.m.name)} <span class="asset-tag">${r.m.asset}</span></b><small>${ext(addrUrl(r.m.address), `${esc(r.m.symbol)}<span class="hide-sm mono"> ${short(r.m.address)}</span>`, 'muted')}</small></span>
         </span>
         <span role="cell" class="r num">${apyText(r.m.apy)}</span>
         <span role="cell" class="share-cell c-${marketKey(r.m.name)}"><span class="minibar"><i style="width:${Math.min(100, share(r.usd)).toFixed(2)}%"></i></span><span class="num muted">${pct(share(r.usd), 1)}</span></span>
@@ -129,12 +123,7 @@ function positionLines(st: ScStrategy, snap: Snapshot): string {
 /** Every wallet that shipped a strategy: where its shares sit, value, earnings and activity. */
 export function mountScStrategies(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Wallet strategies</h2>
-        <p class="muted">Wallets that committed their shares via Aqua. Every position below is held by the wallet itself.</p>
-      </div>
-    </header>
+    ${sectionHead({ icon: 'users', title: 'Wallet strategies', desc: 'Wallets that committed their shares via Aqua. Every position below is held by the wallet itself.' })}
     <div class="st-list" role="table" aria-label="Wallet strategies">
       <div class="st-row st-headrow" role="row">
         <span role="columnheader">Wallet</span>
@@ -159,7 +148,7 @@ export function mountScStrategies(root: HTMLElement): void {
             const fills = st.counts.flashes + st.counts.swaps;
             return `
       <div class="st-row${mine ? ' is-mine' : ''}" role="row">
-        <span role="cell" class="st-maker"><a class="num" href="${addrUrl(st.maker)}" target="_blank" rel="noopener">${short(st.maker)}</a>${mine ? ' <span class="pill pill-pos">You</span>' : ''}<small class="muted">${strategyFlags(st)}</small></span>
+        <span role="cell" class="st-maker">${ext(addrUrl(st.maker), short(st.maker), 'mono')}${mine ? ' <span class="pill pill-accent">You</span>' : ''}<small class="muted">${strategyFlags(st)}</small></span>
         <span role="cell" class="st-pos">${positionLines(st, snapshot!)}</span>
         <span role="cell" class="st-value r num"><small class="sm-only muted">Value</small>${usd(st.valueUsd, 0)}</span>
         <span role="cell" class="st-earned r num"><small class="sm-only muted">Earned</small><span class="pos">${usd(st.earned.totalUsd)}</span><small class="muted">JIT ${usd(st.earned.jitFeesUsd)} · spread ${usd(st.earned.spreadUsd)}</small></span>
@@ -167,6 +156,6 @@ export function mountScStrategies(root: HTMLElement): void {
       </div>`;
           })
           .join('')
-      : `<p class="empty muted">No wallet has committed yet. Connect, supply to a market and commit to be the first.</p>`;
+      : emptyState('No wallet has committed yet. Connect, supply to a market and commit to be the first.', 'users');
   });
 }

@@ -3,6 +3,7 @@ import { mockERC20Abi } from '../../bots/src/abis.ts';
 import { account, addrUrl, connect, disconnect, refreshBalances, switchNetwork, write } from '../chain.ts';
 import { CHAIN_ID, FAUCET, GAS_FAUCET_URL, PROFILE_NAMES } from '../config.ts';
 import { $, num, short, tok, units, usd } from '../format.ts';
+import { copyBtn, ext, icon, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 import { txStatus } from './tx.ts';
 import { signedHtml } from './yield.ts';
@@ -12,16 +13,13 @@ const LOW_GAS = parseEther('0.0005');
 /** Connection state, balances, positions and the test-token faucet. */
 export function mountWallet(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head card-head-row">
-      <h2>Wallet</h2>
-      <a class="head-link num" data-addr target="_blank" rel="noopener"></a>
-    </header>
+    ${sectionHead({ icon: 'wallet', title: 'Wallet', aside: `<span class="head-addr" data-addr-wrap hidden><a class="head-link ext" data-addr target="_blank" rel="noopener"></a>${copyBtn('', 'Copy address')}</span>` })}
     <div data-pane="none" hidden>
-      <p class="note">No browser wallet detected. Install an EIP-1193 wallet such as MetaMask, Rabby or Coinbase Wallet to trade and deposit. Live data works without one.</p>
+      <p class="note note-ico">${icon('info')}<span>No browser wallet detected. Install an EIP-1193 wallet such as MetaMask, Rabby or Coinbase Wallet to trade and deposit. Live data works without one.</span></p>
     </div>
     <div data-pane="disconnected" hidden>
       <p class="note">Connect a wallet on Base Sepolia to sign Fusion intents, deposit and get test tokens.</p>
-      <button type="button" class="btn btn-primary btn-block" data-connect>Connect wallet</button>
+      <button type="button" class="btn btn-primary btn-block" data-connect>${icon('wallet')}<span>Connect wallet</span></button>
     </div>
     <div data-pane="wrong" hidden>
       <p class="note">Your wallet is on another network. YieldSolver runs on Base Sepolia (84532).</p>
@@ -30,20 +28,20 @@ export function mountWallet(root: HTMLElement): void {
     </div>
     <div data-pane="connected" hidden>
       <dl class="kv kv-tight">
-        <div><dt>ETH <span class="muted">gas</span></dt><dd class="num" data-bal="eth">—</dd></div>
+        <div><dt>ETH <span class="muted">· gas</span></dt><dd class="num" data-bal="eth">—</dd></div>
         <div><dt>USDC</dt><dd class="num" data-bal="usdc">—</dd></div>
         <div><dt>WETH</dt><dd class="num" data-bal="weth">—</dd></div>
       </dl>
-      <p class="note warn-note" data-gas hidden>Transactions need Base Sepolia ETH for gas. <a href="${GAS_FAUCET_URL}" target="_blank" rel="noopener">Get some from a faucet ↗</a></p>
+      <p class="note warn-note note-ico" data-gas hidden>${icon('alert')}<span>Transactions need Base Sepolia ETH for gas. ${ext(GAS_FAUCET_URL, 'Get some from a faucet')}</span></p>
       <div class="faucet" data-faucet hidden>
-        <button type="button" class="btn btn-secondary btn-block" data-mint>Get test tokens</button>
+        <button type="button" class="btn btn-secondary btn-block" data-mint>${icon('droplet')}<span>Get test tokens</span></button>
         <p class="tx-msg" data-mint-msg></p>
       </div>
       <div class="position">
-        <div class="pos-head"><h3>Positions</h3><span class="num" data-pos-total></span></div>
+        <div class="pos-head"><h3>${icon('pie')}<span>Positions</span></h3><span class="num" data-pos-total></span></div>
         <ul class="pos-list" data-pos-list></ul>
       </div>
-      <button type="button" class="link-btn disconnect" data-disconnect>Disconnect</button>
+      <button type="button" class="link-btn disconnect" data-disconnect>${icon('exit')}<span>Disconnect</span></button>
     </div>`;
 
   const panes = root.querySelectorAll<HTMLElement>('[data-pane]');
@@ -85,10 +83,11 @@ export function mountWallet(root: HTMLElement): void {
   store.subscribe(({ wallet, balances, snapshot }) => {
     const pane = wallet.status === 'none' ? 'none' : wallet.status !== 'connected' ? 'disconnected' : wallet.chainId !== CHAIN_ID ? 'wrong' : 'connected';
     panes.forEach((p) => (p.hidden = p.dataset.pane !== pane));
-    addr.hidden = !wallet.address;
+    $(root, '[data-addr-wrap]').hidden = !wallet.address;
     if (wallet.address) {
       addr.href = addrUrl(wallet.address);
-      addr.textContent = `${short(wallet.address)} ↗`;
+      addr.innerHTML = `<span class="mono">${short(wallet.address)}</span>${icon('external')}`;
+      $(root, '[data-copy]').dataset.copy = wallet.address;
     }
     $<HTMLButtonElement>(root, '[data-connect]').disabled = wallet.status === 'connecting';
     $(root, '[data-faucet]').hidden = !snapshot?.mock;

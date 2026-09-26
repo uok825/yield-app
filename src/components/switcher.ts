@@ -1,4 +1,5 @@
 import { $ } from '../format.ts';
+import { icon } from '../icons.ts';
 import { store } from '../store.ts';
 
 export type StrategyId = 'sc' | 'a' | 'b' | 'carry';
@@ -16,29 +17,26 @@ function load(): StrategyId {
   }
 }
 
-const shield = `<svg class="switch-ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5 2.75 3.5v4c0 3.1 2.2 5.9 5.25 7 3.05-1.1 5.25-3.9 5.25-7v-4L8 1.5Z"/><path d="m5.6 8.1 1.7 1.7 3.1-3.3"/></svg>`;
-
 /**
  * Self-custody (primary, full row on small screens) + the managed vaults; calls `onChange` with the initial choice and every change.
  * The carry tab only appears when the snapshot reports a carry vault.
  */
 export function mountSwitcher(root: HTMLElement, onChange: (id: StrategyId) => void): void {
+  const opt = (id: StrategyId, ico: Parameters<typeof icon>[0], title: string, sub: string, extra = '') => `
+      <button type="button" class="switch-opt${id === 'sc' ? ' switch-primary' : ''}" data-strategy="${id}"${id === 'carry' ? ' hidden' : ''}>
+        <span class="switch-top">${icon(ico, 16, 'switch-ico')}<b>${title}</b>${extra}</span>
+        <small>${sub}</small>
+      </button>`;
   root.innerHTML = `
-    <button type="button" class="switch-opt switch-primary" data-strategy="sc">
-      <span class="switch-top">${shield}<b>Self-custody · Aqua-native</b><span class="pill pill-pos">Recommended</span></span>
-      <small class="muted">Tokens stay in your wallet · earn lending APY + fill fees</small>
-    </button>
+    <div class="switch-lead">
+      <span class="switch-caption">Recommended</span>
+      ${opt('sc', 'shield', 'Self-custody · Aqua-native', 'Tokens stay in your wallet · APY + fill fees')}
+    </div>
     <div class="switch-group" role="group" aria-label="Managed vaults">
-      <span class="switch-caption muted">Managed vaults · the vault holds your deposit</span>
-      <button type="button" class="switch-opt" data-strategy="a">
-        <b>A · Yield + JIT</b><small class="muted">USDC · low risk</small>
-      </button>
-      <button type="button" class="switch-opt" data-strategy="b">
-        <b>B · Inventory MM</b><small class="muted">USDC + ETH · inventory exposure</small>
-      </button>
-      <button type="button" class="switch-opt" data-strategy="carry" hidden>
-        <b>C · ETH Carry</b><small class="muted">ETH · borrows only when it pays</small>
-      </button>
+      <span class="switch-caption">Managed vaults · the vault holds your deposit</span>
+      ${opt('a', 'zap', 'A · Yield + JIT', 'USDC · low risk')}
+      ${opt('b', 'scale', 'B · Inventory MM', 'USDC + ETH · inventory exposure')}
+      ${opt('carry', 'earn', 'C · ETH Carry', 'ETH · borrows only when it pays')}
     </div>`;
 
   let current: StrategyId = 'sc';

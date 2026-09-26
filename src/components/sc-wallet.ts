@@ -9,7 +9,8 @@ import { account, addrUrl, connect, encodeStrategy, ensureAllowance, refreshBala
 import { CHAIN_ID, GAS_FAUCET_URL, PROFILE_NAMES } from '../config.ts';
 import { $, esc, num, parseAmount, short, type Token, TOKEN_DEC, TOKEN_DP, toInput, tok, units, usd } from '../format.ts';
 import { type ScCommit, type ScHolding, store } from '../store.ts';
-import { apyText, icon, marketKey, splitLabel, strategyFlags } from './self-custody.ts';
+import { copyBtn, ext, icon, sectionHead } from '../icons.ts';
+import { apyText, marketKey, splitLabel, strategyFlags } from './self-custody.ts';
 import { txLink, txStatus } from './tx.ts';
 
 type Mode = 'supply' | 'withdraw';
@@ -28,17 +29,14 @@ const shipOrder = (sc: SelfCustody) => [...sc.markets.filter((m) => m.asset === 
 
 export function mountScWallet(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head card-head-row">
-      <div><h2>Your wallet</h2><p class="muted">Self-custody position · nothing is deposited with YieldSolver</p></div>
-      <a class="head-link num" data-addr target="_blank" rel="noopener"></a>
-    </header>
+    ${sectionHead({ icon: 'shield', title: 'Your wallet', desc: 'Self-custody position · nothing is deposited with YieldSolver', aside: `<span class="head-addr" data-addr-wrap hidden><a class="head-link ext" data-addr target="_blank" rel="noopener"></a>${copyBtn('', 'Copy address')}</span>` })}
     <div data-pane="off" hidden><p class="note">Self-custody isn’t enabled on this deployment.</p></div>
     <div data-pane="none" hidden>
-      <p class="note">No browser wallet detected. Install an EIP-1193 wallet such as MetaMask, Rabby or Coinbase Wallet to supply and commit. Live data works without one.</p>
+      <p class="note note-ico">${icon('info')}<span>No browser wallet detected. Install an EIP-1193 wallet such as MetaMask, Rabby or Coinbase Wallet to supply and commit. Live data works without one.</span></p>
     </div>
     <div data-pane="disconnected" hidden>
       <p class="note">Connect a wallet on Base Sepolia to supply to a market, commit your shares via Aqua and follow what they earn.</p>
-      <button type="button" class="btn btn-primary btn-block" data-connect>Connect wallet</button>
+      <button type="button" class="btn btn-primary btn-block" data-connect>${icon('wallet')}<span>Connect wallet</span></button>
     </div>
     <div data-pane="wrong" hidden>
       <p class="note">Your wallet is on another network. YieldSolver runs on Base Sepolia (84532).</p>
@@ -47,14 +45,14 @@ export function mountScWallet(root: HTMLElement): void {
     </div>
     <div data-pane="connected" hidden>
       <section class="sc-sec sc-sec-first">
-        <div class="sc-sec-head"><h3>Shares in your wallet</h3><span class="num" data-total></span></div>
+        <div class="sc-sec-head"><h3>${icon('coins')}<span>Shares in your wallet</span></h3><span class="num" data-total></span></div>
         <ul class="sc-hold" data-holdings><li class="muted empty-sm">Reading your positions…</li></ul>
         <p class="note sc-hint" data-faucet-hint hidden>No USDC or WETH yet? Use <b>Get test tokens</b> in the Wallet card (mock tokens).</p>
-        <p class="note warn-note" data-gas hidden>Every step is a transaction paid in Base Sepolia ETH. <a href="${GAS_FAUCET_URL}" target="_blank" rel="noopener">Get some from a faucet ↗</a></p>
+        <p class="note warn-note note-ico" data-gas hidden>${icon('alert')}<span>Every step is a transaction paid in Base Sepolia ETH. ${ext(GAS_FAUCET_URL, 'Get some from a faucet')}</span></p>
       </section>
 
       <section class="sc-sec">
-        <div class="sc-sec-head"><h3><span class="step-n">1</span>Supply to a market</h3><span class="muted small">shares → your wallet</span></div>
+        <div class="sc-sec-head"><h3><span class="step-n">1</span><span>Supply to a market</span></h3><span class="muted small">shares → your wallet</span></div>
         <form class="deposit-form" data-supply novalidate>
           <div class="tabs" role="tablist">
             <button type="button" role="tab" data-mode="supply">Supply</button>
@@ -80,7 +78,7 @@ export function mountScWallet(root: HTMLElement): void {
       </section>
 
       <section class="sc-sec">
-        <div class="sc-sec-head"><h3><span class="step-n">2</span>Commit via Aqua</h3><span class="muted small" data-commit-state></span></div>
+        <div class="sc-sec-head"><h3><span class="step-n">2</span><span>Commit via Aqua</span></h3><span class="muted small" data-commit-state></span></div>
         <div data-commit-form>
           <div class="field-head"><span class="label">Inventory target (USDC / ETH by value)</span></div>
           <div class="tabs tabs-3" role="radiogroup" aria-label="Target mix" data-profiles></div>
@@ -176,10 +174,11 @@ export function mountScWallet(root: HTMLElement): void {
     const s = snapshot?.selfCustody ?? null;
     const pane = !s ? 'off' : wallet.status === 'none' ? 'none' : wallet.status !== 'connected' ? 'disconnected' : wallet.chainId !== CHAIN_ID ? 'wrong' : 'connected';
     panes.forEach((p) => (p.hidden = p.dataset.pane !== pane));
-    addr.hidden = !wallet.address;
+    $(root, '[data-addr-wrap]').hidden = !wallet.address;
     if (wallet.address) {
       addr.href = addrUrl(wallet.address);
-      addr.textContent = `${short(wallet.address)} ↗`;
+      addr.innerHTML = `<span class="mono">${short(wallet.address)}</span>${icon('external')}`;
+      $(root, '[data-copy]').dataset.copy = wallet.address;
     }
     $<HTMLButtonElement>(root, '[data-connect]').disabled = wallet.status === 'connecting';
     if (!s || !snapshot) return;
@@ -287,7 +286,7 @@ export function mountScWallet(root: HTMLElement): void {
 
     commitForm.hidden = active.length > 0;
     activeEl.hidden = active.length === 0;
-    $(root, '[data-commit-state]').innerHTML = active.length ? '<span class="status is-done">Active</span>' : 'not committed';
+    $(root, '[data-commit-state]').innerHTML = active.length ? '<span class="status is-live">Active</span>' : 'not committed';
 
     if (!b?.sc) return;
     if (!active.length) {
@@ -302,7 +301,7 @@ export function mountScWallet(root: HTMLElement): void {
             <span class="sc-hold-name"><i class="swatch c-${marketKey(m.name)}"></i><span><b>${esc(m.name)} · ${m.asset}</b><small class="muted num">${
               shares > 0n ? `${num(units(shares, h!.decimals), 2)} ${esc(m.symbol)}` : 'budget 0 · keeper may move shares here'
             }</small></span></span>
-            <span class="r"><span class="num">${shares > 0n ? tok(h!.assets, m.asset) : '—'}</span><small class="${approved ? 'pos' : 'muted'}">${approved ? '✓ approved' : 'needs approval'}</small></span>
+            <span class="r"><span class="num">${shares > 0n ? tok(h!.assets, m.asset) : '—'}</span><small class="approval${approved ? ' is-ok' : ''}">${approved ? `${icon('check')}approved` : 'needs approval'}</small></span>
           </li>`;
         })
         .join('');
@@ -352,10 +351,10 @@ export function mountScWallet(root: HTMLElement): void {
       : `<p class="note sc-indexing"><i class="spinner" aria-hidden="true"></i>Shipped${local ? ` · ${txLink(local.tx)}` : ''}. The relayer indexes new strategies within a few seconds.</p>`;
     return `
       <div class="sc-active">
-        <div class="sc-active-head"><span>${flags ? `<b class="num">${esc(flags)}</b>` : ''}<small class="muted num" title="${c.hash}">Strategy ${short(c.hash)} · keeper on</small></span></div>
+        <div class="sc-active-head"><span>${flags ? `<b class="num">${esc(flags)}</b>` : ''}<small class="muted" title="${c.hash}">Strategy <span class="mono">${short(c.hash)}</span> · keeper on</small></span></div>
         <ul class="sc-budgets">${rows}</ul>
         ${stats}
-        <button type="button" class="btn btn-secondary btn-block" data-dock="${c.hash}">Stop (dock)</button>
+        <button type="button" class="btn btn-secondary btn-block" data-dock="${c.hash}">${icon('power')}<span>Stop (dock)</span></button>
         <small class="muted sc-dock-note">Dock removes the budgets in one transaction. Your shares stay where they are; withdraw them in step 1 whenever you like.</small>
       </div>`;
   }

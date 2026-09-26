@@ -2,6 +2,7 @@ import type { InventoryVault } from '../api.ts';
 import { addrUrl } from '../chain.ts';
 import { PROFILE_NAMES } from '../config.ts';
 import { $, apyPct, bps, num, pct, units, usd } from '../format.ts';
+import { icon, sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 import { apyBasis, apyHtml, extrapolatedTitle, isExtrapolated, signedHtml, sparkLegend, sparkline } from './yield.ts';
 
@@ -100,12 +101,7 @@ function allocRow(price: number) {
 
 export function mountProfiles(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Inventory profiles</h2>
-        <p class="muted" data-note></p>
-      </div>
-    </header>
+    ${sectionHead({ icon: 'scale', title: 'Inventory profiles', descAttr: 'data-note' })}
     <div class="prof-list" role="table" aria-label="Inventory profiles">
       <div class="prof-row prof-headrow" role="row">
         <span role="columnheader">Profile</span>
@@ -119,7 +115,7 @@ export function mountProfiles(root: HTMLElement): void {
     </div>
     <div class="yield-sec">
       <div class="yield-head">
-        <h3>Where the inventory sits</h3>
+        <h3>${icon('layers')}<span>Where the inventory sits</span></h3>
         <p class="muted">Each profile keeps a liquid buffer of both assets for instant fills and lends the rest through one lending market per asset. Morpho and Fluid are used by strategy A.</p>
       </div>
       <div class="alc-list" role="table" aria-label="Inventory allocation by profile">
@@ -128,7 +124,7 @@ export function mountProfiles(root: HTMLElement): void {
     </div>
     <div class="yield-sec">
       <div class="yield-head">
-        <h3>Yield by profile</h3>
+        <h3>${icon('earn')}<span>Yield by profile</span></h3>
         <p class="muted" data-basis></p>
       </div>
       <div class="yield-list" role="table" aria-label="Yield by profile">

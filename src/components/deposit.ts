@@ -1,6 +1,7 @@
 import { yieldVaultAbi } from '../../bots/src/abis.ts';
 import { account, ensureAllowance, publicClient, refreshBalances, write } from '../chain.ts';
 import { $, num, parseAmount, pct, toInput, tok, units, usd } from '../format.ts';
+import { sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 import { txStatus } from './tx.ts';
 
@@ -9,7 +10,7 @@ type Mode = 'deposit' | 'withdraw';
 /** Strategy A · ERC-4626 deposit (USDC) and redeem (ysUSDC shares). */
 export function mountDeposit(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head card-head-row"><h2>Yield vault</h2><span class="muted small">ERC-4626 · ysUSDC</span></header>
+    ${sectionHead({ icon: 'vault', title: 'Yield vault', aside: '<span class="head-meta">ERC-4626 · ysUSDC</span>' })}
     <div class="tabs" role="tablist">
       <button type="button" role="tab" data-mode="deposit">Deposit</button>
       <button type="button" role="tab" data-mode="withdraw">Withdraw</button>

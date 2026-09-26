@@ -4,6 +4,7 @@ import type { InventoryVault } from '../api.ts';
 import { account, ensureAllowance, publicClient, refreshBalances, write } from '../chain.ts';
 import { PROFILE_NAMES } from '../config.ts';
 import { $, num, parseAmount, pct, toInput, tok, units, usd } from '../format.ts';
+import { sectionHead } from '../icons.ts';
 import { store } from '../store.ts';
 import { txStatus } from './tx.ts';
 
@@ -35,7 +36,7 @@ function bandCheck(v: InventoryVault, price: number, usdcIn: bigint, wethIn: big
 /** Strategy B · two-asset deposit into one profile, in-kind redeem. */
 export function mountMmDeposit(root: HTMLElement): void {
   root.innerHTML = `
-    <header class="card-head card-head-row"><h2>Inventory vault</h2><span class="muted small">USDC + WETH</span></header>
+    ${sectionHead({ icon: 'vault', title: 'Inventory vault', aside: '<span class="head-meta">USDC + WETH</span>' })}
     <div class="tabs" role="tablist">
       <button type="button" role="tab" data-mode="deposit">Deposit</button>
       <button type="button" role="tab" data-mode="withdraw">Withdraw</button>
