@@ -1,7 +1,7 @@
 /** Identifies what lending market an adapter wraps and how to read its supply index (for APY measurement). */
 import type { Address } from 'viem'
 
-import { aaveV3AdapterAbi, erc4626AdapterAbi, mockAavePoolAbi, mockLendingVaultAbi } from './abis.ts'
+import { aave4626Abi, aaveV3AdapterAbi, erc4626AdapterAbi, mockAavePoolAbi, mockLendingVaultAbi } from './abis.ts'
 import { type Context, erc20Abi } from './chain.ts'
 
 export type RateSource = () => Promise<bigint>
@@ -55,4 +55,30 @@ export async function describeAdapter(ctx: Context, adapter: Address): Promise<M
 export function aaveIndex(ctx: Context, pool: Address, asset: Address): RateSource {
   return () =>
     ctx.client.readContract({ address: pool, abi: mockAavePoolAbi, functionName: 'getReserveNormalizedIncome', args: [asset] })
+}
+
+/**
+ * Rate source for a self-custody ERC-4626 market. Aave-4626 wrappers use the Aave reserve index (their own share
+ * price is flat until someone deposits); other markets are probed via their share price with 1e18 precision.
+ */
+export async function erc4626Rate(ctx: Context, market: Address): Promise<RateSource> {
+  const pool = await ctx.client
+    .readContract({ address: market, abi: aave4626Abi, functionName: 'POOL' })
+    .catch(() => undefined)
+  if (pool) {
+    const asset = await ctx.client.readContract({ address: market, abi: aave4626Abi, functionName: 'asset' })
+    return aaveIndex(ctx, pool, asset)
+  }
+  const shareDecimals = await ctx.client.readContract({ address: market, abi: erc20Abi, functionName: 'decimals' })
+  const probe = 10n ** BigInt(shareDecimals) * 10n ** 18n
+  return () =>
+    ctx.client.readContract({ address: market, abi: mockLendingVaultAbi, functionName: 'convertToAssets', args: [probe] })
+}
+
+/** Trust-score key for a self-custody market: the deployment's Morpho / Fluid markets, otherwise an Aave-4626 wrapper. */
+export function walletMarketName(ctx: Context, market: Address): string {
+  const m = market.toLowerCase()
+  if (m === ctx.d.morphoMarket?.toLowerCase()) return 'morpho'
+  if (m === ctx.d.fluidMarket?.toLowerCase()) return 'fluid'
+  return 'aave'
 }

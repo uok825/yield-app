@@ -11,7 +11,9 @@ import { join } from 'node:path'
 import { type Address, getAddress, parseEventLogs, zeroHash } from 'viem'
 
 import { erc20Abi, type Context } from './chain.ts'
-import { aaveV3AdapterAbi, chainlinkAggregatorAbi } from './abis.ts'
+import { aaveV3AdapterAbi, aquaYieldAppAbi, chainlinkAggregatorAbi } from './abis.ts'
+import { StrategyRegistry, positions, selfCustodyEnabled } from './wallets.ts'
+import { erc4626Rate, walletMarketName } from './markets.ts'
 import { inventoryVaultAbi, oracleSwapAppAbi, yieldVaultAbi } from './abis.ts'
 import { apyOverWindow, type RateSample } from './allocation.ts'
 import { aaveIndex, describeAdapter, type MarketInfo } from './markets.ts'
@@ -49,6 +51,11 @@ interface Persisted {
   spread: Record<string, { income: string; swaps: number }>
   samples: Record<string, { t: number; index: string }[]>
   perf?: Record<string, PerfSample[]>
+  /** Self-custody income per maker, from AquaYieldApp events. Amounts in token units (strings). */
+  wallets?: Record<
+    string,
+    { jitFees: Record<string, string>; flashes: number; spreadUsd: number; swaps: number; rebalances: number; lastRebalance?: number }
+  >
   inception?: Record<string, PerfSample & { fromDeposit?: boolean }>
 }
 
@@ -93,7 +100,9 @@ export class Snapshotter {
     const head = await client.getBlockNumber()
     let from = BigInt(this.state.lastBlock) + 1n
     if (from === 1n) from = BigInt(d.deployBlock || Number(head))
-    const vaults = [d.vault, ...(d.inventoryVaults ?? [])].filter((a) => a && a !== ZERO)
+    const vaults = [d.vault, ...(d.inventoryVaults ?? []), ...(selfCustodyEnabled(ctx) ? [d.aquaYieldApp!] : [])].filter(
+      (a) => a && a !== ZERO,
+    )
     while (from <= head) {
       const to = from + ctx.cfg.logBlockRange - 1n < head ? from + ctx.cfg.logBlockRange - 1n : head
       const logs = await client.getLogs({ address: vaults, fromBlock: from, toBlock: to })
@@ -101,6 +110,7 @@ export class Snapshotter {
         this.state.jitFees = (BigInt(this.state.jitFees) + ev.args.fee).toString()
         this.state.jitFills++
       }
+      if (selfCustodyEnabled(ctx)) await this.foldWalletEvents(logs)
       for (const ev of parseEventLogs({ abi: inventoryVaultAbi, logs, eventName: 'SwapSettled' })) {
         const key = getAddress(ev.address)
         const s = (this.state.spread[key] ??= { income: '0', swaps: 0 })
@@ -116,6 +126,12 @@ export class Snapshotter {
     if (t - this.lastSampleT >= SAMPLE_EVERY_SEC) {
       this.lastSampleT = t
       const keep = ctx.cfg.keeper.apyWindowSec * 3
+      for (const m of [...(d.walletStableMarkets ?? []), ...(d.walletVolatileMarkets ?? [])]) {
+        if (!this.walletRates.has(m)) this.walletRates.set(m, await erc4626Rate(ctx, m))
+        const list = (this.state.samples[`w:${m}`] ??= [])
+        list.push({ t, index: (await this.walletRates.get(m)!()).toString() })
+        while (list.length > 2 && t - list[1].t >= ctx.cfg.keeper.apyWindowSec * 3) list.shift()
+      }
       for (const m of await this.marketList()) {
         const list = (this.state.samples[m.key] ??= [])
         list.push({ t, index: (await m.rate()).toString() })
@@ -158,6 +174,8 @@ export class Snapshotter {
   }
 
   private backfilled = false
+  private registry?: StrategyRegistry
+  private walletRates = new Map<string, () => Promise<bigint>>()
 
   /**
    * Anchors each vault's inception at its first on-chain Deposit (basket, shares, oracle price at that block), so
@@ -281,6 +299,127 @@ export class Snapshotter {
     }
     this.adapterNames.set(adapter, name)
     return name
+  }
+
+  private async foldWalletEvents(logs: any[]) {
+    const { d } = this.ctx
+    const w = (this.state.wallets ??= {})
+    const entry = (maker: string) => (w[getAddress(maker)] ??= { jitFees: {}, flashes: 0, spreadUsd: 0, swaps: 0, rebalances: 0 })
+    const app = getAddress(d.aquaYieldApp!)
+    const mine = logs.filter((l) => getAddress(l.address) === app)
+    for (const ev of parseEventLogs({ abi: aquaYieldAppAbi, logs: mine })) {
+      if (ev.eventName === 'Flash') {
+        const e = entry(ev.args.maker)
+        const token = getAddress(ev.args.market)
+        e.jitFees[token] = (BigInt(e.jitFees[token] ?? '0') + ev.args.fee).toString()
+        e.flashes++
+      } else if (ev.eventName === 'Swap') {
+        // Maker's gain at the oracle price: value received − value sold (USDC 6 dp, WETH 18 dp, price 1e18-scaled).
+        const e = entry(ev.args.maker)
+        const usdcIn = getAddress(ev.args.tokenIn) === getAddress(d.usdc)
+        const px = Number(ev.args.oraclePrice) / 1e24 // USD per ETH
+        const inUsd = usdcIn ? Number(ev.args.amountIn) / 1e6 : (Number(ev.args.amountIn) / 1e18) * px
+        const outUsd = usdcIn ? (Number(ev.args.amountOut) / 1e18) * px : Number(ev.args.amountOut) / 1e6
+        e.spreadUsd += inUsd - outUsd
+        e.swaps++
+      } else if (ev.eventName === 'Rebalanced') {
+        const e = entry(ev.args.maker)
+        e.rebalances++
+        e.lastRebalance = Number(ev.blockNumber)
+      }
+    }
+  }
+
+  /** Self-custody view: listed markets with APYs and every active wallet strategy's positions and income. */
+  private async selfCustody(ethPrice: number) {
+    const { ctx } = this
+    const { d, client } = ctx
+    if (!selfCustodyEnabled(ctx)) return null
+    this.registry ??= new StrategyRegistry(ctx)
+    await this.registry.sync()
+    const lite = [
+      { type: 'function', name: 'convertToAssets', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint256' }] },
+      { type: 'function', name: 'symbol', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] },
+    ] as const
+    const markets = await Promise.all(
+      [...(d.walletStableMarkets ?? []), ...(d.walletVolatileMarkets ?? [])].map(async (m) => ({
+        address: m,
+        name: MARKET_NAMES[walletMarketName(ctx, m)] ?? 'Lending',
+        symbol: await client.readContract({ address: m, abi: lite, functionName: 'symbol' }),
+        asset: (d.walletStableMarkets ?? []).includes(m) ? ('USDC' as const) : ('WETH' as const),
+        apy: this.apy(`w:${m}`),
+      })),
+    )
+    const toUsd = (asset: 'USDC' | 'WETH', amount: bigint) =>
+      asset === 'USDC' ? Number(amount) / 1e6 : (Number(amount) / 1e18) * ethPrice
+    const strategies = await Promise.all(
+      this.registry.active().map(async (sh) => {
+        const pos = await positions(ctx, sh)
+        const rows = await Promise.all(
+          pos.map(async (p) => {
+            const asset = sh.strategy.stableMarkets.includes(p.market) ? ('USDC' as const) : ('WETH' as const)
+            const [inWallet, committed] = await Promise.all([
+              client.readContract({ address: p.market, abi: lite, functionName: 'convertToAssets', args: [p.balance] }),
+              client.readContract({ address: p.market, abi: lite, functionName: 'convertToAssets', args: [p.budget] }),
+            ])
+            return {
+              market: p.market,
+              name: markets.find((m) => m.address === p.market)?.name ?? 'Lending',
+              asset,
+              shares: p.balance,
+              budget: p.budget,
+              usable: p.usable,
+              assets: inWallet,
+              committedAssets: committed,
+              usd: toUsd(asset, inWallet),
+            }
+          }),
+        )
+        const income = this.state.wallets?.[sh.maker] ?? { jitFees: {}, flashes: 0, spreadUsd: 0, swaps: 0, rebalances: 0 }
+        const jitFeesUsd = Object.entries(income.jitFees).reduce((sum, [market, fee]) => {
+          const asset = (d.walletStableMarkets ?? []).includes(market as Address) ? 'USDC' : 'WETH'
+          return sum + toUsd(asset, BigInt(fee))
+        }, 0)
+        const valueUsd = rows.reduce((sum, r) => sum + r.usd, 0)
+        return {
+          maker: sh.maker,
+          hash: sh.hash,
+          keeper: sh.strategy.keeper,
+          taker: sh.strategy.taker,
+          flashFeeBps: sh.strategy.flashFeeBps,
+          mm: {
+            spreadBps: sh.strategy.mm.spreadBps,
+            targetStableBps: sh.strategy.mm.targetStableBps,
+            bandBps: sh.strategy.mm.bandBps,
+          },
+          positions: rows.filter((r) => r.shares > 0n || r.budget > 0n),
+          valueUsd: round2(valueUsd),
+          earned: {
+            jitFeesUsd: round2(jitFeesUsd),
+            spreadUsd: round2(income.spreadUsd),
+            totalUsd: round2(jitFeesUsd + income.spreadUsd),
+          },
+          counts: { flashes: income.flashes, swaps: income.swaps, rebalances: income.rebalances },
+          lastRebalanceBlock: income.lastRebalance ?? null,
+          usdcShare: valueUsd > 0 ? round2((rows.filter((r) => r.asset === 'USDC').reduce((a, r) => a + r.usd, 0) / valueUsd) * 100) : null,
+        }
+      }),
+    )
+    const sum = (f: (x: (typeof strategies)[number]) => number) => round2(strategies.reduce((a, x) => a + f(x), 0))
+    return {
+      app: d.aquaYieldApp,
+      resolver: d.walletResolver,
+      markets,
+      strategies,
+      totals: {
+        wallets: strategies.length,
+        valueUsd: sum((x) => x.valueUsd ?? 0),
+        earnedUsd: sum((x) => x.earned.totalUsd ?? 0),
+        jitFeesUsd: sum((x) => x.earned.jitFeesUsd ?? 0),
+        spreadUsd: sum((x) => x.earned.spreadUsd ?? 0),
+        rebalances: strategies.reduce((a, x) => a + x.counts.rebalances, 0),
+      },
+    }
   }
 
   private apy(key: string): number | null {
@@ -426,6 +565,7 @@ export class Snapshotter {
       },
       oracle: { price: oracle.price, updatedAt: oracle.updatedAt },
       strategyA,
+      selfCustody: await this.selfCustody(oracle.price),
       strategyB: {
         performance: aggregate(vaults),
         spreadBps: d.spreadBps,

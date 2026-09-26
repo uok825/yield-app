@@ -55,7 +55,8 @@ export async function buildQuote(ctx: Context, req: QuoteRequest): Promise<Quote
   const auctionStart = now + BigInt(cfg.maker.auctionDelaySec)
   const order = newFusionOrder({
     settlement: d.fusionSettlement,
-    resolvers: [d.resolver],
+    // Every YieldSolver resolver contract that may fill (vault strategies + self-custody wallets).
+    resolvers: d.walletResolver ? [d.resolver, d.walletResolver] : [d.resolver],
     maker: getAddress(req.maker),
     makerAsset,
     takerAsset,

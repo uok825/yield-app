@@ -35,6 +35,11 @@ export interface Deployment {
   spreadBps: number
   skewBps: number
   maxTradeBps: number
+  // Self-custody mode (DeployWallet.s.sol) — absent on older deployments
+  aquaYieldApp?: Address
+  walletResolver?: Address
+  walletStableMarkets?: Address[]
+  walletVolatileMarkets?: Address[]
 }
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -118,6 +123,10 @@ export function loadConfig() {
       rebalanceThresholdBps: num('KEEPER_REBALANCE_THRESHOLD_BPS', 100),
       /** Reorder the withdraw queue only when APYs are out of order by more than this (percentage points). */
       queueHysteresisPct: num('KEEPER_QUEUE_HYSTERESIS_PCT', 0.25),
+      /** Self-custody: move a wallet's shares to a better market only if its APY is at least this much higher (pp). */
+      walletMinGainPct: num('KEEPER_WALLET_MIN_GAIN_PCT', 0.25),
+      /** Self-custody: at most one move per strategy side per this many seconds (APY noise must not cause churn). */
+      walletCooldownSec: num('KEEPER_WALLET_COOLDOWN_SEC', 3600),
       idleBufferBps: num('KEEPER_IDLE_BUFFER_BPS', 3_000),
       maxSwapSlippageBps: num('KEEPER_MAX_SWAP_SLIPPAGE_BPS', 30),
       trustScores: JSON.parse(env('KEEPER_TRUST_SCORES', '{}')) as Record<string, number>,

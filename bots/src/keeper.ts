@@ -19,7 +19,9 @@ import {
   yieldAdapterAbi,
   yieldVaultAbi,
 } from './abis.ts'
-import { describeAdapter, type MarketInfo } from './markets.ts'
+import { describeAdapter, erc4626Rate, walletMarketName, type MarketInfo, type RateSource } from './markets.ts'
+import { StrategyRegistry, positions, selfCustodyEnabled } from './wallets.ts'
+import { aquaYieldAppAbi } from './abis.ts'
 import { apyOverWindow, inventoryRebalance, planAllocation, queueNeedsReorder, type RateSample } from './allocation.ts'
 import { type Context, erc20Abi, revertReason, write } from './chain.ts'
 import { logger } from './log.ts'
@@ -56,6 +58,9 @@ export async function startKeeper(ctx: Context, signal: AbortSignal) {
   mkdirSync(cfg.stateDir, { recursive: true })
   const book = new RateBook(join(cfg.stateDir, `keeper-rates-${ctx.chain.id}.json`))
   const markets = new Map<Address, MarketInfo>()
+  const registry = new StrategyRegistry(ctx)
+  const walletRates = new Map<Address, RateSource>()
+  const lastWalletMove = new Map<string, number>()
   log.info('starting', { vault: ctx.d.vault, inventories: ctx.d.inventoryVaults.length, intervalMs: cfg.keeper.intervalMs })
 
   await runEvery('keeper', cfg.keeper.intervalMs, signal, async () => {
@@ -65,6 +70,13 @@ export async function startKeeper(ctx: Context, signal: AbortSignal) {
         await tickYieldVault(ctx, book, markets, now)
       } catch (err) {
         log.error('strategy A tick failed', { error: revertReason(err) })
+      }
+    }
+    if (selfCustodyEnabled(ctx)) {
+      try {
+        await tickWallets(ctx, registry, book, walletRates, lastWalletMove, now)
+      } catch (err) {
+        log.error('self-custody tick failed', { error: revertReason(err) })
       }
     }
     for (const vault of ctx.d.inventoryVaults ?? []) {
@@ -208,3 +220,76 @@ async function tickInventory(ctx: Context, vault: Address) {
   count('keeper', 'B.rebalance')
   log.info(`${symbol}: rebalanced to target`, { from: `${Number(ratio) / 100}%`, target: `${target / 100}%` })
 }
+
+/**
+ * Self-custody: for every active AquaYieldApp strategy that names this keeper, move each side's shares into the
+ * best listed market (apy × trust) when the gain clears KEEPER_WALLET_MIN_GAIN_PCT. Shares never leave the wallet
+ * except inside the rebalance transaction.
+ */
+async function tickWallets(
+  ctx: Context,
+  registry: StrategyRegistry,
+  book: RateBook,
+  rates: Map<Address, RateSource>,
+  lastMove: Map<string, number>,
+  now: number,
+) {
+  const { cfg, client, d } = ctx
+  await registry.sync()
+  const keeper = ctx.wallet('keeper')
+  const all = [...(d.walletStableMarkets ?? []), ...(d.walletVolatileMarkets ?? [])]
+  const apy = new Map<Address, number | undefined>()
+  for (const m of all) {
+    if (!rates.has(m)) rates.set(m, await erc4626Rate(ctx, m))
+    book.add(`w:${m}`, { t: now, index: await rates.get(m)!() }, cfg.keeper.apyWindowSec * 3)
+    apy.set(m, apyOverWindow(book.get(`w:${m}`), cfg.keeper.apyWindowSec))
+  }
+  const score = (m: Address) => (apy.get(m) ?? -Infinity) * (cfg.keeper.trustScores[walletMarketName(ctx, m)] ?? 90) / 100
+
+  const mine = registry.active().filter((s) => s.strategy.keeper.toLowerCase() === keeper.account.address.toLowerCase())
+  log.info('self-custody', {
+    strategies: mine.length,
+    apys: all.map((m) => `${walletMarketName(ctx, m)}:${apy.get(m)?.toFixed(2) ?? '…'}%`).join(' '),
+  })
+
+  for (const sh of mine) {
+    const pos = await positions(ctx, sh)
+    for (const side of ['stable', 'volatile'] as const) {
+      const listed = side === 'stable' ? sh.strategy.stableMarkets : sh.strategy.volatileMarkets
+      if (listed.length < 2 || listed.some((m) => apy.get(m) === undefined)) continue
+      const key = `${sh.hash}:${side}`
+      if (now - (lastMove.get(key) ?? 0) < cfg.keeper.walletCooldownSec) continue
+      const best = [...listed].sort((a, b) => score(b) - score(a))[0]
+      for (const p of pos.filter((x) => x.side === side && x.market !== best && x.usable > 0n)) {
+        const gain = (apy.get(best) ?? 0) - (apy.get(p.market) ?? 0)
+        if (gain < cfg.keeper.walletMinGainPct) continue
+        const [assets, liquidity] = await Promise.all([
+          client.readContract({ address: p.market, abi: mockLendingVaultAbiLite, functionName: 'convertToAssets', args: [p.usable] }),
+          client.readContract({ address: p.market, abi: mockLendingVaultAbiLite, functionName: 'maxRedeem', args: [sh.maker] }),
+        ])
+        const minMove = side === 'stable' ? 10n * 10n ** 6n : 3n * 10n ** 15n // $10 / 0.003 ETH
+        const shares = p.usable < liquidity ? p.usable : liquidity
+        if (assets < minMove || shares === 0n) continue
+        await write(ctx, keeper, {
+          address: d.aquaYieldApp!,
+          abi: aquaYieldAppAbi,
+          functionName: 'rebalance',
+          args: [sh.strategy as any, p.market, best, shares],
+        })
+        count('keeper', 'W.rebalance')
+        lastMove.set(key, now)
+        log.info('self-custody rebalanced', {
+          maker: sh.maker.slice(0, 8),
+          from: walletMarketName(ctx, p.market),
+          to: walletMarketName(ctx, best),
+          gainPct: gain.toFixed(2),
+        })
+      }
+    }
+  }
+}
+
+const mockLendingVaultAbiLite = [
+  { type: 'function', name: 'convertToAssets', stateMutability: 'view', inputs: [{ type: 'uint256' }], outputs: [{ type: 'uint256' }] },
+  { type: 'function', name: 'maxRedeem', stateMutability: 'view', inputs: [{ type: 'address' }], outputs: [{ type: 'uint256' }] },
+] as const

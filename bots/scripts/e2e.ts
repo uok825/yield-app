@@ -89,16 +89,18 @@ async function main() {
   }
 
   step('deploy contracts (forge script, --slow)')
-  const deploy = spawnSync(
-    foundryBin('forge'),
-    ['script', 'script/Deploy.s.sol', '--rpc-url', RPC, '--private-key', KEYS.deployer, '--broadcast', '--slow'],
-    { cwd: contracts, env: { ...process.env, KEEPER: ADDR.keeper, OPERATOR: ADDR.operator }, encoding: 'utf8' },
-  )
-  if (deploy.status !== 0) {
-    console.error(deploy.stdout, deploy.stderr)
-    throw new Error('deploy failed')
+  for (const script of ['Deploy.s.sol', 'DeployWallet.s.sol']) {
+    const deploy = spawnSync(
+      foundryBin('forge'),
+      ['script', `script/${script}`, '--rpc-url', RPC, '--private-key', KEYS.deployer, '--broadcast', '--slow'],
+      { cwd: contracts, env: { ...process.env, KEEPER: ADDR.keeper, OPERATOR: ADDR.operator }, encoding: 'utf8' },
+    )
+    if (deploy.status !== 0) {
+      console.error(deploy.stdout, deploy.stderr)
+      throw new Error(`${script} failed`)
+    }
+    console.log(deploy.stdout.split('\n').filter((l) => /\[A\]|\[B\]|LimitOrder|Fusion|Resolver|AquaYield/.test(l)).join('\n'))
   }
-  console.log(deploy.stdout.split('\n').filter((l) => /\[A\]|\[B\]|LimitOrder|Fusion|Resolver/.test(l)).join('\n'))
 
   Object.assign(process.env, {
     RPC_URL: RPC,
@@ -115,6 +117,7 @@ async function main() {
     RESOLVER_POLL_MS: '1000',
     KEEPER_INTERVAL_MS: '8000',
     KEEPER_APY_WINDOW_SEC: '16',
+    KEEPER_WALLET_COOLDOWN_SEC: '20',
     SIM_INTERVAL_MS: '4000',
     MAKER_INTERVAL_MS: '3000',
     MAKER_AUCTION_DURATION_SEC: '40',
@@ -157,8 +160,6 @@ async function main() {
   await printStatus(ctx)
   const relayer = relayerClient(process.env.RELAYER_URL!)
   const orders = await relayer.orders('?limit=500')
-  controller.abort()
-  await Promise.allSettled(bots)
   const filled = orders.filter((o) => o.status === 'filled')
   const byRoute: Record<string, number> = {}
   for (const o of filled) byRoute[o.report?.route?.split(':')[0] ?? 'unreported'] = (byRoute[o.report?.route?.split(':')[0] ?? 'unreported'] ?? 0) + 1
@@ -171,6 +172,11 @@ async function main() {
   )
 
   const marketsUsed = Object.keys(byRoute).filter((r) => r !== 'unreported')
+  const snap = (await (await fetch(`${process.env.RELAYER_URL}/v1/snapshot`)).json()) as any
+  const sc = snap.selfCustody
+  controller.abort()
+  await Promise.allSettled(bots)
+  console.log('self-custody:', JSON.stringify(sc?.totals), sc?.strategies?.map((x: any) => `${x.maker.slice(0, 8)} $${x.valueUsd} earned $${x.earned.totalUsd} rebalances ${x.counts.rebalances} in ${x.positions.map((p: any) => p.name + '/' + p.asset).join(',')}`))
   const checks: [string, boolean][] = [
     ['makers posted orders', orders.length >= 5],
     ['resolver filled most orders', filled.length >= Math.max(3, Math.floor(orders.length * 0.5))],
@@ -178,6 +184,10 @@ async function main() {
     ['keeper allocated strategy A capital', allocated > 0n],
     ['both strategies filled orders (jit + inventory)', marketsUsed.includes('jit') && marketsUsed.includes('inventory')],
     ['inventory vaults hold value', values.every((v) => v > 0n)],
+    ['self-custody strategies shipped from wallets', (sc?.totals?.wallets ?? 0) >= 2],
+    ['orders filled from wallet liquidity', marketsUsed.some((r) => r.startsWith('wallet-'))],
+    ['keeper moved wallet shares to a better market', (sc?.totals?.rebalances ?? 0) >= 1],
+    ['self-custody LPs earned', (sc?.totals?.earnedUsd ?? 0) > 0],
   ]
   let ok = true
   for (const [name, pass] of checks) {

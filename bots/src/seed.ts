@@ -6,15 +6,23 @@
  *   Strategy B: SEED_B_USD into each InventoryVault at its target split
  * Idempotent: vaults that already hold liquidity are skipped.
  */
-import { maxUint256, parseUnits } from 'viem'
+import { type Address, type Hex, maxUint256, parseEther, parseUnits, toHex, zeroHash } from 'viem'
+import { mnemonicToAccount, privateKeyToAccount } from 'viem/accounts'
 
-import { inventoryVaultAbi, mockAavePoolAbi, mockERC20Abi, mockLendingVaultAbi, yieldVaultAbi } from './abis.ts'
+import { aquaAbi, aave4626Abi, inventoryVaultAbi, mockAavePoolAbi, mockERC20Abi, mockLendingVaultAbi, yieldVaultAbi } from './abis.ts'
+import { assertCleanWallets } from './maker.ts'
+import { StrategyRegistry, encodeStrategy, selfCustodyEnabled, type WalletStrategy } from './wallets.ts'
 import { type Context, erc20Abi, write } from './chain.ts'
 import { logger } from './log.ts'
 
 const log = logger('seed')
 
 export async function seed(ctx: Context) {
+  await seedVaults(ctx)
+  await seedWallets(ctx)
+}
+
+async function seedVaults(ctx: Context) {
   const { d, client } = ctx
   if (!d.mock) throw new Error('seed only runs on mock deployments — deposit real funds through the vaults instead')
   const w = ctx.wallet('deployer')
@@ -73,5 +81,97 @@ export async function seed(ctx: Context) {
     await approve(d.weth, v)
     await write(ctx, w, { address: v, abi: inventoryVaultAbi, functionName: 'deposit', args: [stableIn, wethIn, me, 1n] })
     log.info('seeded inventory profile', { vault: v, usd: bUsd, targetStable: targetStable / 100 })
+  }
+}
+
+/**
+ * Self-custody LPs (mock deployments): wallets that supply to lending markets themselves, keep the ERC-4626 shares,
+ * approve Aqua and ship one AquaYieldApp strategy (keeper rebalancing + JIT + market making).
+ * Keys derive from MAKER_MNEMONIC at index MAKER_INDEX_OFFSET + 100 + i.
+ */
+export function walletLps(ctx: Context) {
+  const mnemonic = ctx.cfg.makerMnemonic
+  if (!mnemonic) throw new Error('MAKER_MNEMONIC is required to seed self-custody LPs')
+  const count = Number(process.env.WALLET_LP_COUNT ?? 2)
+  return Array.from({ length: count }, (_, i) => {
+    const key = toHex(mnemonicToAccount(mnemonic, { addressIndex: ctx.cfg.makerIndexOffset + 100 + i }).getHdKey().privateKey!)
+    return { index: i, key: key as Hex, address: privateKeyToAccount(key as Hex).address }
+  })
+}
+
+export async function seedWallets(ctx: Context) {
+  const { d, client, cfg } = ctx
+  if (!selfCustodyEnabled(ctx)) return log.info('self-custody mode not deployed; skipping wallet LPs')
+  if (!d.mock) throw new Error('seed only runs on mock deployments')
+  const lps = walletLps(ctx)
+  await assertCleanWallets(ctx, lps.map((l) => l.address))
+  const registry = new StrategyRegistry(ctx)
+  await registry.sync()
+  const funder = ctx.wallet('deployer')
+  const keeperAddr = privateKeyToAccount(cfg.keys.keeper ?? cfg.keys.deployer!).address
+  const usd = Number(process.env.SEED_WALLET_USD ?? 100_000)
+  const stableMarkets = d.walletStableMarkets ?? []
+  const volatileMarkets = d.walletVolatileMarkets ?? []
+
+  for (const lp of lps) {
+    if (registry.active().some((s) => s.maker === lp.address)) {
+      log.info('wallet LP already has a strategy', { lp: lp.address })
+      continue
+    }
+    if ((await client.getBalance({ address: lp.address })) < parseEther('0.001')) {
+      const hash = await funder.sendTransaction({ to: lp.address, value: parseEther(process.env.MAKER_GAS_ETH ?? '0.002') })
+      await client.waitForTransactionReceipt({ hash })
+    }
+    const w = ctx.walletFor(lp.key)
+    const target = lp.index % 2 === 0 ? 7_000 : 5_000
+    const [price] = await Promise.all([
+      client.readContract({ address: d.inventoryVaults[0], abi: inventoryVaultAbi, functionName: 'price' }),
+    ])
+    const stableIn = parseUnits(String((usd * target) / 10_000), 6)
+    const wethIn = ((parseUnits(String(usd), 6) - stableIn) * 10n ** 36n) / price
+    const usdcMarket = stableMarkets[lp.index % Math.min(2, stableMarkets.length)] // Morpho for LP 0, Fluid for LP 1
+    const wethMarket = volatileMarkets[0]
+
+    await write(ctx, w, { address: d.usdc, abi: mockERC20Abi, functionName: 'mint', args: [lp.address, stableIn] })
+    await write(ctx, w, { address: d.weth, abi: mockERC20Abi, functionName: 'mint', args: [lp.address, wethIn] })
+    await write(ctx, w, { address: d.usdc, abi: erc20Abi, functionName: 'approve', args: [usdcMarket, maxUint256] })
+    await write(ctx, w, { address: d.weth, abi: erc20Abi, functionName: 'approve', args: [wethMarket, maxUint256] })
+    await write(ctx, w, { address: usdcMarket, abi: aave4626Abi, functionName: 'deposit', args: [stableIn, lp.address] })
+    await write(ctx, w, { address: wethMarket, abi: aave4626Abi, functionName: 'deposit', args: [wethIn, lp.address] })
+
+    const markets = [...stableMarkets, ...volatileMarkets] as Address[]
+    for (const m of markets) {
+      await write(ctx, w, { address: m, abi: erc20Abi, functionName: 'approve', args: [d.aqua, maxUint256] })
+    }
+    const budgets = await Promise.all(
+      markets.map((m) => client.readContract({ address: m, abi: erc20Abi, functionName: 'balanceOf', args: [lp.address] })),
+    )
+    const strategy: WalletStrategy = {
+      maker: lp.address,
+      stable: d.usdc,
+      volatileAsset: d.weth,
+      stableMarkets,
+      volatileMarkets,
+      keeper: keeperAddr,
+      taker: d.walletResolver!,
+      flashFeeBps: d.flashFeeBps,
+      mm: {
+        oracle: d.oracle,
+        maxPriceAge: d.mock ? 365 * 24 * 3600 : 3600,
+        spreadBps: d.spreadBps,
+        skewBps: d.skewBps,
+        maxTradeBps: d.maxTradeBps,
+        targetStableBps: target,
+        bandBps: 500,
+      },
+      salt: zeroHash,
+    }
+    await write(ctx, w, {
+      address: d.aqua,
+      abi: aquaAbi,
+      functionName: 'ship',
+      args: [d.aquaYieldApp!, encodeStrategy(strategy), markets, budgets],
+    })
+    log.info('wallet LP shipped strategy', { lp: lp.address, usd, target: target / 100, usdcMarket })
   }
 }
