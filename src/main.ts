@@ -18,6 +18,7 @@ import { mountWallet } from './components/wallet.ts';
 import { POLL, PROFILE_NAMES } from './config.ts';
 import { $, esc, short } from './format.ts';
 import { icon, installCopy } from './icons.ts';
+import { mountSectionFocus } from './section-focus.ts';
 import { store } from './store.ts';
 
 /* ── Layout ─────────────────────────────── */
@@ -67,6 +68,7 @@ const boot = $(app, '[data-boot]');
 const body = $(app, '[data-body]');
 const banner = $(app, '[data-banner]');
 const m = (id: string) => $(app, `[data-mount="${id}"]`);
+mountSectionFocus(page);
 
 /* ── Live data ──────────────────────────── */
 
