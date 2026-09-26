@@ -25,20 +25,24 @@ aqua-app/
 ├── public/
 │   └── favicon.svg             # Project branding favicon
 ├── src/
-│   ├── main.ts                 # Page layout, history seed, simulation loops
-│   ├── config.ts               # Markets (APY, trust score), reserve ratio, timings
-│   ├── types.ts                # Market, Fill and State types
-│   ├── store.ts                # Minimal reactive store (pure updaters)
+│   ├── main.ts                 # Page layout (A/B views), history seed, simulation loops
+│   ├── config.ts               # A: markets, reserve ratio · B: profiles, spread/skew/band · timings
+│   ├── types.ts                # A: Market, Fill, State · B: Profile, MmEvent, MmState
+│   ├── store.ts                # Minimal reactive stores for A and B (pure updaters)
 │   ├── format.ts               # USD / % / number / time formatters, DOM query helper
 │   ├── engine/
 │   │   ├── vault.ts            # ERC-4626 share math, rebalance (15% reserve), APY drift, draws
-│   │   └── resolver.ts         # Simulated Fusion orders: auction → JIT loan → repay + fee
+│   │   ├── resolver.ts         # Simulated Fusion orders: auction → JIT loan → repay + fee
+│   │   └── mm.ts               # B: oracle walk, skewed bid/ask, routing, band checks, keeper, in-kind shares
 │   ├── components/
 │   │   ├── topbar.ts           # Logo, Base pill, demo label, mock wallet
-│   │   ├── stats.ts            # TVL, lending APY, JIT fees, orders filled
-│   │   ├── allocation.ts       # Stacked bar + market list with sparklines
-│   │   ├── fills.ts            # Recent fills (pair, amount, liquidity source, fee, status)
-│   │   └── deposit.ts          # Deposit / withdraw card and user position
+│   │   ├── switcher.ts         # Strategy A / B selector (remembered in localStorage)
+│   │   ├── stats.ts            # Stat rows: A (TVL, APY, JIT fees) and B (TVL, net APY, oracle, fills)
+│   │   ├── allocation.ts       # A: stacked bar + market list with sparklines
+│   │   ├── profiles.ts         # B: per-profile ratio bar with band, skew, bid/ask, status
+│   │   ├── fills.ts            # Recent fills: A (JIT loans) and B (inventory fills, rejects, keeper)
+│   │   ├── deposit.ts          # A: deposit / withdraw card and user position
+│   │   └── mm-deposit.ts       # B: USDC + ETH deposit with band check, in-kind withdraw
 │   └── style.css               # Design tokens, dark + light themes
 └── aqua.md                     # Hackathon project specification
 ```

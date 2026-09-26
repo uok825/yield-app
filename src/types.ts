@@ -35,3 +35,46 @@ export interface State {
   filledCount: number;
   volume: number;
 }
+
+/* ── Strategy B · Inventory MM ─────────────── */
+export type ProfileId = 'stable' | 'balanced' | 'eth';
+
+export interface Profile {
+  id: ProfileId;
+  name: string;
+  target: number; // target USDC share of value, e.g. 0.7
+  usdc: number;
+  eth: number;
+  totalShares: number;
+  userShares: number;
+  rebalancing: boolean; // out of band; the keeper swaps back to target next tick
+}
+
+export interface MmEvent {
+  id: string;
+  kind: 'fill' | 'rejected' | 'keeper';
+  dir: 'USDC → ETH' | 'ETH → USDC'; // the taker's direction (keeper: the vault's swap)
+  usd: number; // notional at oracle price
+  profile: ProfileId | null;
+  price: number; // execution price, USD per ETH
+  edgeBps: number; // vault's gain vs oracle
+  income: number; // USD, measured at oracle price
+  at: number;
+}
+
+export interface MmState {
+  price: number; // oracle, USD per ETH
+  history: number[]; // recent oracle prices
+  usdcApy: number;
+  ethApy: number;
+  profiles: Profile[];
+  events: MmEvent[];
+  flow: number; // −1…1, persistent taker bias toward selling (−) or buying (+) ETH
+  walletEth: number;
+  simHours: number;
+  spreadIncome: number;
+  keeperCost: number;
+  fillCount: number;
+  rejectedCount: number;
+  volume: number;
+}

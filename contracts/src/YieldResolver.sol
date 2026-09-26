@@ -9,14 +9,19 @@ import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {IAqua} from "@1inch/aqua/interfaces/IAqua.sol";
 
 import {JitLiquidityApp} from "./JitLiquidityApp.sol";
+import {OracleSwapApp} from "./OracleSwapApp.sol";
 import {IJitLiquidityCallback} from "./interfaces/IJitLiquidity.sol";
+import {IInventoryMaker, IOracleSwapCallback} from "./interfaces/IOracleSwap.sol";
 
 /// @title YieldResolver
-/// @notice Order resolver funded by JIT liquidity. An operator borrows vault liquidity through
-///         `JitLiquidityApp`, runs a list of calls against whitelisted targets (e.g. the 1inch Limit Order
-///         Protocol / Fusion settlement to fill an order, then a router to unwind the received asset), repays
-///         principal + fee to the vault and keeps the rest as profit.
-contract YieldResolver is Ownable2Step, IJitLiquidityCallback {
+/// @notice Order resolver for both strategies. An operator runs a list of calls against whitelisted targets
+///         (e.g. the 1inch Limit Order Protocol / Fusion settlement to fill an order, a router to unwind) funded by:
+///         - Strategy A (`execute`): JIT liquidity borrowed from a YieldVault through `JitLiquidityApp`, repaid
+///           with a fee in the same transaction.
+///         - Strategy B (`executeSwap`): inventory bought from an InventoryVault through `OracleSwapApp` at
+///           oracle-anchored prices, paid for with the proceeds of the fill.
+///         Whatever is left over is the resolver's profit; loss-making runs revert.
+contract YieldResolver is Ownable2Step, IJitLiquidityCallback, IOracleSwapCallback {
     using SafeERC20 for IERC20;
 
     error OnlyOperator();
@@ -29,6 +34,9 @@ contract YieldResolver is Ownable2Step, IJitLiquidityCallback {
     event OperatorSet(address indexed operator, bool allowed);
     event TargetSet(address indexed target, bool allowed);
     event Executed(bytes32 indexed strategyHash, address indexed token, uint256 amount, uint256 fee, uint256 profit);
+    event SwapExecuted(
+        bytes32 indexed strategyHash, address indexed tokenOut, uint256 amountOut, uint256 amountIn, uint256 profit
+    );
 
     struct Call {
         address target;
@@ -38,6 +46,7 @@ contract YieldResolver is Ownable2Step, IJitLiquidityCallback {
 
     IAqua public immutable AQUA;
     JitLiquidityApp public immutable APP;
+    OracleSwapApp public immutable SWAP_APP;
 
     mapping(address => bool) public isOperator;
     mapping(address => bool) public isAllowedTarget;
@@ -49,10 +58,15 @@ contract YieldResolver is Ownable2Step, IJitLiquidityCallback {
         _;
     }
 
-    constructor(IAqua aqua_, JitLiquidityApp app_, address owner_, address operator_) Ownable(owner_) {
-        if (address(aqua_) == address(0) || address(app_) == address(0)) revert ZeroAddress();
+    constructor(IAqua aqua_, JitLiquidityApp app_, OracleSwapApp swapApp_, address owner_, address operator_)
+        Ownable(owner_)
+    {
+        if (address(aqua_) == address(0) || address(app_) == address(0) || address(swapApp_) == address(0)) {
+            revert ZeroAddress();
+        }
         AQUA = aqua_;
         APP = app_;
+        SWAP_APP = swapApp_;
         if (operator_ != address(0)) {
             isOperator[operator_] = true;
             emit OperatorSet(operator_, true);
@@ -83,6 +97,56 @@ contract YieldResolver is Ownable2Step, IJitLiquidityCallback {
         emit Executed(APP.strategyHash(strategy), address(token), amount, fee, profit);
     }
 
+    /// @notice Buys exactly `amountOut` of `tokenOut` from inventory, runs `calls` (which must produce the other
+    ///         asset to pay with, e.g. by filling the user's order), pays the vault and keeps the rest.
+    /// @return profit Net gain in the paying token. The resolver may not end with less `tokenOut` than it started.
+    function executeSwap(
+        OracleSwapApp.Strategy calldata strategy,
+        address tokenOut,
+        uint256 amountOut,
+        uint256 maxAmountIn,
+        Call[] calldata calls,
+        uint256 minProfit
+    ) external onlyOperator returns (uint256 profit) {
+        (IERC20 out, IERC20 pay) = _swapTokens(strategy.maker, tokenOut);
+        uint256[2] memory before = [out.balanceOf(address(this)), pay.balanceOf(address(this))];
+
+        _executing = true;
+        uint256 amountIn =
+            SWAP_APP.swapExactOut(strategy, tokenOut, amountOut, maxAmountIn, address(this), abi.encode(calls));
+        _executing = false;
+
+        uint256 payAfter = pay.balanceOf(address(this));
+        profit = payAfter > before[1] ? payAfter - before[1] : 0;
+        if (out.balanceOf(address(this)) < before[0] || payAfter < before[1] || profit < minProfit) {
+            revert InsufficientProfit(profit, minProfit);
+        }
+        emit SwapExecuted(SWAP_APP.strategyHash(strategy), tokenOut, amountOut, amountIn, profit);
+    }
+
+    function _swapTokens(address maker, address tokenOut) internal view returns (IERC20 out, IERC20 pay) {
+        address stableToken = IInventoryMaker(maker).stable();
+        out = IERC20(tokenOut);
+        pay = IERC20(tokenOut == stableToken ? IInventoryMaker(maker).volatileAsset() : stableToken);
+    }
+
+    /// @inheritdoc IOracleSwapCallback
+    function oracleSwapCallback(
+        address tokenIn,
+        address,
+        uint256 amountIn,
+        uint256,
+        address maker,
+        bytes32 strategyHash,
+        bytes calldata data
+    ) external override {
+        if (msg.sender != address(SWAP_APP)) revert OnlyApp();
+        if (!_executing) revert NotExecuting();
+        _runCalls(data);
+        IERC20(tokenIn).forceApprove(address(AQUA), amountIn);
+        AQUA.push(maker, address(SWAP_APP), strategyHash, tokenIn, amountIn);
+    }
+
     /// @inheritdoc IJitLiquidityCallback
     function onJitLiquidity(
         address token,
@@ -95,16 +159,20 @@ contract YieldResolver is Ownable2Step, IJitLiquidityCallback {
         if (msg.sender != address(APP)) revert OnlyApp();
         if (!_executing) revert NotExecuting();
 
+        _runCalls(data);
+
+        uint256 repay = amount + fee;
+        IERC20(token).forceApprove(address(AQUA), repay);
+        AQUA.push(maker, address(APP), strategyHash, token, repay);
+    }
+
+    function _runCalls(bytes calldata data) internal {
         Call[] memory calls = abi.decode(data, (Call[]));
         for (uint256 i; i < calls.length; ++i) {
             Call memory c = calls[i];
             if (!isAllowedTarget[c.target]) revert TargetNotAllowed(c.target);
             Address.functionCallWithValue(c.target, c.data, c.value);
         }
-
-        uint256 repay = amount + fee;
-        IERC20(token).forceApprove(address(AQUA), repay);
-        AQUA.push(maker, address(APP), strategyHash, token, repay);
     }
 
     // ─── Owner ───────────────────────────────────────────────────────────────
