@@ -7,7 +7,9 @@ import { mountFills } from './components/fills.ts';
 import { mountIntent } from './components/intent.ts';
 import { mountMmDeposit } from './components/mm-deposit.ts';
 import { mountProfiles } from './components/profiles.ts';
-import { mountMmStats, mountStats } from './components/stats.ts';
+import { mountScWallet } from './components/sc-wallet.ts';
+import { mountScExplainer, mountScMarkets, mountScStrategies } from './components/self-custody.ts';
+import { mountMmStats, mountScStats, mountStats } from './components/stats.ts';
 import { mountSwitcher } from './components/switcher.ts';
 import { mountTopbar } from './components/topbar.ts';
 import { mountWallet } from './components/wallet.ts';
@@ -20,21 +22,27 @@ import { store } from './store.ts';
 const app = $(document, '#app');
 app.innerHTML = `
   <header class="topbar"></header>
-  <main class="page" data-strategy="a">
+  <main class="page" data-strategy="sc">
     <div class="boot" data-boot role="status"></div>
     <div class="app-body" data-body hidden>
       <div class="banner" data-banner role="status" hidden></div>
       <nav class="switcher" aria-label="Strategy"></nav>
+      <section class="card sc-hero" data-only="sc" data-mount="sc-hero" aria-label="How self-custody works"></section>
+      <section class="stats" data-only="sc" aria-label="Self-custody overview"></section>
       <section class="stats" data-only="a" aria-label="Strategy A overview"></section>
       <section class="stats" data-only="b" aria-label="Strategy B overview"></section>
       <div class="grid">
         <div class="col-main">
+          <section class="card o-alloc" data-only="sc" data-mount="sc-markets"></section>
+          <section class="card o-strat" data-only="sc" data-mount="sc-strategies"></section>
+          <section class="card o-fills" data-only="sc" data-mount="fills-sc"></section>
           <section class="card o-alloc" data-only="a" data-mount="alloc-a"></section>
           <section class="card o-alloc" data-only="b" data-mount="alloc-b"></section>
           <section class="card o-fills" data-only="a" data-mount="fills-a"></section>
           <section class="card o-fills" data-only="b" data-mount="fills-b"></section>
         </div>
         <div class="col-side">
+          <section class="card o-sc area-wallet" data-only="sc" data-mount="sc-wallet"></section>
           <section class="card o-intent" data-mount="intent"></section>
           <section class="card o-deposit" data-only="a" data-mount="deposit-a"></section>
           <section class="card o-deposit" data-only="b" data-mount="deposit-b"></section>
@@ -135,7 +143,9 @@ store.subscribe(({ snapshot }) => {
   if (!snapshot || footKey === snapshot.contracts.vault) return;
   footKey = snapshot.contracts.vault;
   const c = snapshot.contracts;
+  const sc = snapshot.selfCustody;
   const items: [string, string][] = [
+    ...(sc ? ([['Aqua', sc.aqua], ['AquaYieldApp', sc.app], ['Wallet resolver', sc.resolver]] as [string, string][]) : []),
     ['YieldVault', c.vault],
     ...c.inventoryVaults.map((a, i): [string, string] => [`Inventory · ${PROFILE_NAMES[i]}`, a]),
     ['Resolver', c.resolver],
@@ -147,12 +157,18 @@ store.subscribe(({ snapshot }) => {
   ];
   $(app, '[data-foot]').innerHTML = `
     <div class="contracts">${items.map(([n, a]) => `<a href="${addrUrl(a)}" target="_blank" rel="noopener"><span>${n}</span> <span class="num">${short(a)}</span></a>`).join('')}</div>
-    <p>Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolver.</p>`;
+    <p>Base Sepolia testnet${snapshot.mock ? ' · mock tokens and lending markets' : ''} · 1inch Fusion intents settled on-chain by the YieldSolver resolvers · self-custody via 1inch Aqua.</p>`;
 });
 
 /* ── Mount ──────────────────────────────── */
 
 mountTopbar($(app, '.topbar'));
+mountScExplainer(m('sc-hero'));
+mountScStats($(app, '.stats[data-only="sc"]'));
+mountScMarkets(m('sc-markets'));
+mountScStrategies(m('sc-strategies'));
+mountFills(m('fills-sc'), 'wallet');
+mountScWallet(m('sc-wallet'));
 mountStats($(app, '.stats[data-only="a"]'));
 mountMmStats($(app, '.stats[data-only="b"]'));
 mountAllocation(m('alloc-a'));

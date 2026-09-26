@@ -27,7 +27,10 @@ export function mountTopbar(root: HTMLElement): void {
     const w = store.get().wallet;
     if (w.status === 'disconnected') void connect();
     else if (w.status === 'connected' && w.chainId !== CHAIN_ID) void switchNetwork().catch(() => undefined);
-    else document.querySelector('.area-wallet')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    else
+      [...document.querySelectorAll<HTMLElement>('.area-wallet')]
+        .find((el) => el.offsetParent !== null)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
   store.subscribe(({ snapshot, snapshotError, wallet }) => {

@@ -1,5 +1,34 @@
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
 import type { OrderRecord, Snapshot } from './api.ts';
+
+/** The connected wallet's share balance in one listed self-custody market. */
+export interface ScHolding {
+  address: Address;
+  shares: bigint;
+  /** Shares → underlying (USDC / WETH units). */
+  assets: bigint;
+  decimals: number;
+  /** Allowance granted to Aqua for this share token. */
+  aquaAllowance: bigint;
+}
+
+/** One of the wallet's Aqua strategies as read on-chain (Aqua.rawBalances): what is committed, per market. */
+export interface ScCommit {
+  hash: Hex;
+  /** True while at least one token is in an active (not docked) state. */
+  active: boolean;
+  /** Markets that are part of the strategy with their committed budget (share units). */
+  tokens: { market: Address; budget: bigint }[];
+}
+
+/** A strategy this session shipped (params known locally), kept until the relayer reports it. */
+export interface ScLocal {
+  profileBps: number;
+  flashFeeBps: number;
+  spreadBps: number;
+  shippedAt: number;
+  tx: Hex;
+}
 
 export interface Balances {
   eth: bigint;
@@ -9,6 +38,8 @@ export interface Balances {
   a: { shares: bigint; assets: bigint; maxRedeem: bigint };
   /** Strategy B positions, in snapshot.contracts.inventoryVaults order. */
   b: { shares: bigint; stable: bigint; volatile: bigint }[];
+  /** Self-custody: holdings in snapshot.selfCustody.markets order, and the wallet's strategies. Null without self-custody. */
+  sc: { holdings: ScHolding[]; commits: ScCommit[] } | null;
 }
 
 export interface WalletState {
@@ -27,6 +58,8 @@ export interface State {
   myOrders: OrderRecord[];
   wallet: WalletState;
   balances: Balances | null;
+  /** Strategies shipped in this session, by hash (lets the UI track them before the relayer indexes them). */
+  scLocal: Record<Hex, ScLocal>;
 }
 
 /** Minimal reactive store: `update` merges a patch and notifies subscribers. */
@@ -53,4 +86,5 @@ export const store = createStore<State>({
   myOrders: [],
   wallet: { status: 'disconnected', address: null, chainId: null },
   balances: null,
+  scLocal: {},
 });

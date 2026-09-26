@@ -12,16 +12,18 @@ import {
   createPublicClient,
   createWalletClient,
   custom,
+  encodeAbiParameters,
   http,
+  keccak256,
   maxUint256,
   numberToHex,
   parseEventLogs,
 } from 'viem';
-import { inventoryVaultAbi, mockERC20Abi, yieldVaultAbi } from '../bots/src/abis.ts';
-import type { Snapshot } from './api.ts';
+import { aave4626Abi, aquaAbi, aquaYieldAppAbi, inventoryVaultAbi, mockERC20Abi, yieldVaultAbi } from '../bots/src/abis.ts';
+import type { SelfCustody, Snapshot } from './api.ts';
 import { CHAIN, CHAIN_ID, RPC_URL } from './config.ts';
 import { units } from './format.ts';
-import { type Balances, type WalletState, store } from './store.ts';
+import { type Balances, type ScCommit, type ScHolding, type WalletState, store } from './store.ts';
 
 export const publicClient = createPublicClient({ chain: CHAIN, transport: http(RPC_URL, { batch: true, retryCount: 2 }) });
 
@@ -161,7 +163,79 @@ async function readBalances(user: Address, snap: Snapshot): Promise<Balances> {
     weth,
     a: { shares: aShares, assets: aAssets, maxRedeem },
     b: bShares.map((shares, i) => ({ shares, stable: bOut[i][0], volatile: bOut[i][1] })),
+    sc: snap.selfCustody ? await readSelfCustody(user, snap.selfCustody) : null,
   };
+}
+
+/** Aqua stores a docked token with this tokens-count marker. */
+const DOCKED = 0xff;
+
+/**
+ * Self-custody reads: share balances (+ value, decimals, Aqua allowance) in every listed market, and for each of the
+ * wallet's strategy hashes (relayer-known + shipped this session) the committed budgets from Aqua.rawBalances.
+ */
+async function readSelfCustody(user: Address, sc: SelfCustody): Promise<{ holdings: ScHolding[]; commits: ScCommit[] }> {
+  const markets = sc.markets.map((m) => m.address);
+  const hashes = [
+    ...new Set([
+      ...sc.strategies.filter((s) => s.maker.toLowerCase() === user.toLowerCase()).map((s) => s.hash),
+      ...(Object.keys(store.get().scLocal) as Hex[]),
+    ]),
+  ];
+  const first = (await publicClient.multicall({
+    allowFailure: false,
+    contracts: markets.flatMap((m) => [
+      { address: m, abi: aave4626Abi, functionName: 'balanceOf', args: [user] },
+      { address: m, abi: aave4626Abi, functionName: 'decimals', args: [] },
+      { address: m, abi: aave4626Abi, functionName: 'allowance', args: [user, sc.aqua] },
+    ]) as ContractFunctionParameters[],
+  })) as unknown as (bigint | number)[];
+  const second = (await publicClient.multicall({
+    allowFailure: false,
+    contracts: [
+      ...markets.map((m, i) => ({ address: m, abi: aave4626Abi, functionName: 'convertToAssets', args: [first[i * 3] as bigint] })),
+      ...hashes.flatMap((h) => markets.map((m) => ({ address: sc.aqua, abi: aquaAbi, functionName: 'rawBalances', args: [user, sc.app, h, m] }))),
+    ] as ContractFunctionParameters[],
+  })) as unknown as unknown[];
+  const holdings = markets.map((address, i) => ({
+    address,
+    shares: first[i * 3] as bigint,
+    decimals: Number(first[i * 3 + 1]),
+    aquaAllowance: first[i * 3 + 2] as bigint,
+    assets: second[i] as bigint,
+  }));
+  const commits = hashes.map((hash, h) => {
+    const raw = markets.map((market, i) => {
+      const [budget, count] = second[markets.length + h * markets.length + i] as readonly [bigint, number];
+      return { market, budget, count: Number(count) };
+    });
+    const live = raw.filter((r) => r.count > 0 && r.count !== DOCKED);
+    return { hash, active: live.length > 0, tokens: live.map(({ market, budget }) => ({ market, budget })) };
+  });
+  return { holdings, commits };
+}
+
+/* ── Self-custody strategy encoding ─────── */
+
+const strategyParam = aquaYieldAppAbi.find((x) => x.type === 'function' && x.name === 'strategyHash')!.inputs[0];
+
+export interface ScStrategyParams {
+  maker: Address;
+  stable: Address;
+  volatileAsset: Address;
+  stableMarkets: readonly Address[];
+  volatileMarkets: readonly Address[];
+  keeper: Address;
+  taker: Address;
+  flashFeeBps: number;
+  mm: { oracle: Address; maxPriceAge: number; spreadBps: number; skewBps: number; maxTradeBps: number; targetStableBps: number; bandBps: number };
+  salt: Hex;
+}
+
+/** ABI-encodes an AquaYieldApp.Strategy exactly like `abi.encode(s)`; the Aqua strategy hash is keccak256 of it. */
+export function encodeStrategy(s: ScStrategyParams): { bytes: Hex; hash: Hex } {
+  const bytes = encodeAbiParameters([strategyParam], [s as never]);
+  return { bytes, hash: keccak256(bytes) };
 }
 
 export const allowance = (token: Address, owner: Address, spender: Address) =>
@@ -232,6 +306,11 @@ const REVERTS: Record<string, (args: readonly unknown[]) => string> = {
   ERC20InsufficientAllowance: () => 'Allowance too low (the approval may not be visible yet). Try again.',
   ERC4626ExceededMaxRedeem: () => 'More than can be withdrawn right now. Use Max.',
   ERC4626ExceededMaxDeposit: () => 'Deposits are currently closed.',
+  ERC4626ExceededMaxWithdraw: () => 'More than can be withdrawn right now. Use Max.',
+  StrategiesMustBeImmutable: () => 'This exact strategy was already shipped. Reload and try again (a new salt is used each time).',
+  DockingShouldCloseAllTokens: () => 'Dock must list every token of the strategy. Reload the page and try again.',
+  MaxNumberOfTokensExceeded: () => 'Too many markets in one strategy.',
+  SafeTransferFromFailed: () => 'A share transfer failed (balance or Aqua approval too low).',
 };
 
 export function explain(e: unknown): string {
@@ -244,6 +323,7 @@ export function explain(e: unknown): string {
       return revert.reason ? `Reverted: ${revert.reason}` : 'The transaction would revert.';
     }
     if (/insufficient funds/i.test(e.message)) return 'Not enough Base Sepolia ETH for gas.';
+    if (/429|rate limit|unknown RPC error/i.test(e.message)) return 'The RPC is busy (rate-limited). Nothing was sent; try again in a moment.';
     return e.shortMessage;
   }
   if ((e as { code?: number })?.code === 4001) return 'Rejected in your wallet.';

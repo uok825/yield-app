@@ -149,3 +149,44 @@ export function mountMmStats(root: HTMLElement): void {
     set('apy', t);
   });
 }
+
+/** Self-custody overview: value held in wallets, what wallets earned, keeper moves and the best live lending APY. */
+export function mountScStats(root: HTMLElement): void {
+  const set = tiles(root, [
+    { key: 'value', label: 'In wallets', hint: 'Oracle value of lending-market shares committed via Aqua. Held by the wallets themselves, never by YieldSolver.' },
+    { key: 'earned', label: 'Earned by wallets', hint: 'JIT fees and market-making spread paid back to wallets as shares. Measured, not annualised.' },
+    { key: 'moves', label: 'Keeper moves', hint: 'Rebalances of wallet shares between listed markets (e.g. Morpho → Aave) toward the best APY.' },
+    { key: 'apy', label: 'Best lending APY' },
+  ]);
+  store.subscribe(({ snapshot }) => {
+    if (!snapshot) return;
+    const sc = snapshot.selfCustody;
+    if (!sc) {
+      for (const k of ['value', 'earned', 'moves', 'apy']) set(k, { value: '—', sub: 'not enabled on this deployment' });
+      return;
+    }
+    const t = sc.totals;
+    set('value', {
+      value: usd(t.valueUsd),
+      sub: `<span class="num">${num(t.wallets, 0)}</span> wallet${t.wallets === 1 ? '' : 's'} · shares stay in each wallet`,
+    });
+    set('earned', {
+      value: `<span class="pos">${usd(t.earnedUsd)}</span>`,
+      sub: `JIT <span class="num">${usd(t.jitFeesUsd)}</span> · spread <span class="num">${usd(t.spreadUsd)}</span>`,
+    });
+    set('moves', { value: num(t.rebalances, 0), sub: 'Morpho ↔ Fluid ↔ Aave, toward the best APY' });
+
+    const best = (asset: 'USDC' | 'WETH') =>
+      sc.markets.filter((m) => m.asset === asset && m.apy !== null).sort((x, y) => y.apy! - x.apy!)[0] ?? null;
+    const u = best('USDC');
+    const w = best('WETH');
+    const line = (asset: string, count: number, m: typeof u) =>
+      m ? `${asset} · ${esc(m.name)} <span class="num">${pct(m.apy!)}</span>` : `${asset} · ${count} market${count === 1 ? '' : 's'} measuring…`;
+    set('apy', {
+      value: u ? `${pct(u.apy!)}` : MEASURING,
+      sub: line('USDC', sc.markets.filter((m) => m.asset === 'USDC').length, u),
+      note: line('WETH', sc.markets.filter((m) => m.asset === 'WETH').length, w),
+      title: sc.markets.map((m) => `${m.name} ${m.asset}: ${m.apy === null ? 'measuring…' : pct(m.apy)}`).join(' · '),
+    });
+  });
+}

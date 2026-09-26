@@ -100,7 +100,25 @@ export function mountWallet(root: HTMLElement): void {
     $(root, '[data-gas]').hidden = balances.eth >= LOW_GAS;
 
     const price = snapshot.oracle.price;
+    const sc = snapshot.selfCustody;
+    const scHold = balances.sc?.holdings ?? [];
+    const scValue = scHold.reduce((sum, h) => {
+      const m = sc?.markets.find((x) => x.address.toLowerCase() === h.address.toLowerCase());
+      return sum + (m?.asset === 'WETH' ? units(h.assets, 18) * price : units(h.assets, 6));
+    }, 0);
+    const scCount = scHold.filter((h) => h.shares > 0n).length;
     const rows = [
+      ...(sc
+        ? [
+            {
+              name: 'Self-custody',
+              value: scValue,
+              detail: `${scCount} market${scCount === 1 ? '' : 's'} · shares in your wallet`,
+              extra: '',
+              has: scCount > 0,
+            },
+          ]
+        : []),
       { name: 'A · Yield + JIT', value: units(balances.a.assets, 6), detail: `${num(units(balances.a.shares, 12), 2)} ysUSDC`, extra: '', has: balances.a.shares > 0n },
       ...balances.b.map((p, i) => {
         const hodl = snapshot.strategyB.vaults[i]?.performance?.vsHodlPct ?? null;

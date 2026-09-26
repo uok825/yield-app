@@ -26,7 +26,7 @@ export function mountAllocation(root: HTMLElement): void {
       <div class="alloc-row alloc-headrow" role="row">
         <span role="columnheader">Market</span>
         <span role="columnheader" class="r">APY</span>
-        <span role="columnheader">Share of TVL</span>
+        <span role="columnheader" class="hide-sm">Share of TVL</span>
         <span role="columnheader" class="r">Amount</span>
       </div>
       <div class="alloc-body"></div>

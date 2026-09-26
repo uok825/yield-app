@@ -56,6 +56,70 @@ export interface InventoryVault {
   performance: Performance | null;
 }
 
+/* ── Self-custody (Aqua-native) ─────────── */
+
+export type ScAsset = 'USDC' | 'WETH';
+
+/** An ERC-4626 lending market a wallet can hold shares of and list in its Aqua strategy. */
+export interface ScMarket {
+  address: Address;
+  name: string; // 'Morpho' | 'Fluid' | 'Aave V3'
+  symbol: string;
+  asset: ScAsset;
+  apy: number | null;
+}
+
+export interface ScPosition {
+  market: Address;
+  name: string;
+  asset: ScAsset;
+  shares: bigint; // in the maker's wallet
+  budget: bigint; // committed to Aqua (share units)
+  usable: bigint; // min(budget, balance, allowance)
+  assets: bigint; // shares → underlying
+  committedAssets: bigint;
+  usd: number;
+}
+
+/** A wallet's shipped AquaYieldApp strategy, as tracked by the relayer. */
+export interface ScStrategy {
+  maker: Address;
+  hash: Hex;
+  keeper: Address;
+  taker: Address;
+  flashFeeBps: number;
+  mm: { spreadBps: number; targetStableBps: number; bandBps: number };
+  positions: ScPosition[];
+  valueUsd: number;
+  earned: { jitFeesUsd: number; spreadUsd: number; totalUsd: number };
+  counts: { flashes: number; swaps: number; rebalances: number };
+  lastRebalanceBlock: number | null;
+  usdcShare: number | null;
+}
+
+export interface ScDefaults {
+  keeper: Address;
+  taker: Address;
+  flashFeeBps: number;
+  oracle: Address;
+  maxPriceAge: number;
+  spreadBps: number;
+  skewBps: number;
+  maxTradeBps: number;
+  bandBps: number;
+  profiles: number[]; // targetStableBps options
+}
+
+export interface SelfCustody {
+  app: Address;
+  resolver: Address;
+  aqua: Address;
+  defaults: ScDefaults;
+  markets: ScMarket[];
+  strategies: ScStrategy[];
+  totals: { wallets: number; valueUsd: number; earnedUsd: number; jitFeesUsd: number; spreadUsd: number; rebalances: number };
+}
+
 export interface Snapshot {
   chainId: number;
   mock: boolean;
@@ -95,6 +159,8 @@ export interface Snapshot {
     /** Value-weighted over profiles (no span/history of its own). */
     performance: Pick<Performance, 'netApy' | 'lendingApy' | 'incomeApy' | 'vsHodlPct'> | null;
   };
+  /** Null on deployments without the self-custody app. */
+  selfCustody: SelfCustody | null;
 }
 
 export type OrderStatus = 'pending' | 'filled' | 'expired' | 'cancelled';
@@ -186,12 +252,50 @@ function parseOrder(o: any): OrderRecord {
   };
 }
 
+const num0 = (v: unknown): number => n(v) ?? 0;
+
+function parseSelfCustody(sc: any): SelfCustody | null {
+  if (!sc || typeof sc !== 'object' || !sc.app) return null;
+  const e = sc.earned ?? {};
+  return {
+    ...sc,
+    markets: (sc.markets ?? []).map((m: any) => ({ ...m, apy: n(m.apy) })),
+    strategies: (sc.strategies ?? []).map((st: any) => ({
+      ...st,
+      flashFeeBps: num0(st.flashFeeBps),
+      positions: (st.positions ?? []).map((p: any) => ({
+        ...p,
+        shares: big(p.shares),
+        budget: big(p.budget),
+        usable: big(p.usable),
+        assets: big(p.assets),
+        committedAssets: big(p.committedAssets),
+        usd: num0(p.usd),
+      })),
+      valueUsd: num0(st.valueUsd),
+      earned: { jitFeesUsd: num0(st.earned?.jitFeesUsd ?? e.jitFeesUsd), spreadUsd: num0(st.earned?.spreadUsd), totalUsd: num0(st.earned?.totalUsd) },
+      counts: { flashes: num0(st.counts?.flashes), swaps: num0(st.counts?.swaps), rebalances: num0(st.counts?.rebalances) },
+      lastRebalanceBlock: n(st.lastRebalanceBlock),
+      usdcShare: n(st.usdcShare),
+    })),
+    totals: {
+      wallets: num0(sc.totals?.wallets),
+      valueUsd: num0(sc.totals?.valueUsd),
+      earnedUsd: num0(sc.totals?.earnedUsd),
+      jitFeesUsd: num0(sc.totals?.jitFeesUsd),
+      spreadUsd: num0(sc.totals?.spreadUsd),
+      rebalances: num0(sc.totals?.rebalances),
+    },
+  };
+}
+
 export async function getSnapshot(): Promise<Snapshot> {
   const s: any = await call('/v1/snapshot');
   const a = s.strategyA;
   return {
     ...s,
     block: big(s.block),
+    selfCustody: parseSelfCustody(s.selfCustody),
     strategyA: {
       ...a,
       tvl: big(a.tvl),
@@ -250,10 +354,18 @@ export async function postOrder(body: { orderHash: Hex; order: unknown; extensio
   return r.orderHash;
 }
 
-/** 'jit' → Strategy A; 'inventory:i' → Strategy B vault i. */
-export function parseRoute(route: string | undefined): { kind: 'jit' } | { kind: 'inventory'; index: number } | null {
+export type Route =
+  | { kind: 'jit' }
+  | { kind: 'inventory'; index: number }
+  /** Filled from a self-custody wallet's committed shares: market making ('mm') or a JIT loan ('jit'). */
+  | { kind: 'wallet'; mode: 'mm' | 'jit'; makerPrefix: string };
+
+/** 'jit' → Strategy A; 'inventory:i' → Strategy B vault i; 'wallet-mm:0x…' / 'wallet-jit:0x…' → a self-custody wallet. */
+export function parseRoute(route: string | undefined): Route | null {
   if (!route) return null;
   if (route === 'jit') return { kind: 'jit' };
+  const w = route.match(/^wallet-(mm|jit):(0x[0-9a-fA-F]+)$/);
+  if (w) return { kind: 'wallet', mode: w[1] as 'mm' | 'jit', makerPrefix: w[2].toLowerCase() };
   const m = route.match(/^inventory:(\d+)$/);
   return m ? { kind: 'inventory', index: Number(m[1]) } : null;
 }
