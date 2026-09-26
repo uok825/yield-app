@@ -77,6 +77,7 @@ export class Snapshotter {
   private state: Persisted
   private markets?: { key: string; name: string; rate: MarketInfo['rate'] }[]
   private cache?: { at: number; value: unknown }
+  private building?: Promise<unknown>
   private lastSampleT = 0
   private swapvmRegistry?: SwapVMRegistry
 
@@ -669,11 +670,30 @@ export class Snapshotter {
     return v === undefined || !Number.isFinite(v) ? null : Math.round(v * 100) / 100
   }
 
+  /**
+   * Cached snapshot. Concurrent viewers share one build; if a build fails (e.g. the public RPC rate-limits a read),
+   * the last good snapshot is served instead of an error, so the dashboard never stalls on a transient RPC hiccup.
+   */
   async get(): Promise<unknown> {
     if (this.cache && Date.now() - this.cache.at < TTL_MS) return this.cache.value
-    const value = await this.build()
-    this.cache = { at: Date.now(), value }
-    return value
+    this.building ??= this.build()
+      .then((value) => {
+        this.cache = { at: Date.now(), value }
+        return value
+      })
+      .finally(() => {
+        this.building = undefined
+      })
+    try {
+      return await this.building
+    } catch (err) {
+      if (!this.cache) throw err
+      log.warn('snapshot build failed; serving the last good one', {
+        ageSec: Math.round((Date.now() - this.cache.at) / 1000),
+        error: (err as Error).message.split('\n')[0],
+      })
+      return this.cache.value
+    }
   }
 
   private async build() {

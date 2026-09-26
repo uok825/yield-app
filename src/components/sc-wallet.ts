@@ -307,7 +307,7 @@ export function mountScWallet(root: HTMLElement): void {
         .join('');
       const toApprove = order.filter((m) => (holdingOf(m.address)?.aquaAllowance ?? 0n) < MAX_ISH).length;
       const hasShares = order.some((m) => (holdingOf(m.address)?.shares ?? 0n) > 0n);
-      let label = toApprove ? `Approve ${toApprove} & commit · ${toApprove + 1} tx` : 'Commit · 1 tx';
+      let label = toApprove ? `Approve ${toApprove} & commit` : 'Commit';
       if (!hasShares) label = 'Supply to a market first';
       if (commitMsg.busy) label = 'Working…';
       commitBtn.textContent = label;
