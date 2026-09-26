@@ -1,0 +1,25 @@
+# Dashboard: built with bun, served by `vite preview` which proxies /api to the relayer (RELAYER_PROXY_TARGET).
+FROM oven/bun:1 AS build
+WORKDIR /app
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
+COPY index.html tsconfig.json vite.config.ts ./
+COPY public ./public
+COPY src ./src
+# The UI imports the generated ABIs from the bots package.
+COPY bots/src/abis.ts ./bots/src/abis.ts
+ARG VITE_RPC_URL=https://sepolia.base.org
+ENV VITE_RPC_URL=$VITE_RPC_URL
+RUN bun run build
+
+FROM oven/bun:1
+WORKDIR /app
+COPY --from=build /app/package.json /app/bun.lock ./
+RUN bun install --frozen-lockfile
+COPY --from=build /app/dist ./dist
+COPY vite.config.ts ./
+# vite writes a temporary bundled config next to vite.config.ts
+RUN chown -R bun:bun /app
+USER bun
+EXPOSE 4173
+CMD ["bun", "x", "vite", "preview", "--host", "0.0.0.0", "--port", "4173"]

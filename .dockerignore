@@ -1,0 +1,10 @@
+# Secrets and local state never enter an image
+**/.env
+**/.env.*
+!**/.env.example
+**/.state
+# Heavy / irrelevant for the web image
+**/node_modules
+dist
+contracts
+.git

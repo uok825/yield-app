@@ -60,6 +60,8 @@ git clone --recurse-submodules https://github.com/uok825/yield-app.git
 Smart contracts, tests and deployment: see [`contracts/README.md`](contracts/README.md).
 Relayer, resolver, keeper, maker and simulator bots (Base Sepolia runbook): see [`bots/README.md`](bots/README.md).
 
+Whole stack (bots + dashboard) with Docker: `cd bots && docker compose up -d --build` → dashboard on http://localhost:4173.
+
 ## ⚡ Development & Scripts (Using Bun)
 
 Install dependencies:

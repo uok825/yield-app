@@ -55,8 +55,20 @@ curl localhost:8080/v1/bots                     # bot health (all-in-one mode)
 
 ### Docker
 
-`docker compose up -d --build` runs one container per bot with the same `.env`, mounting
-`../contracts/deployments`. (Not exercised in the environment these bots were developed in; the npm scripts are.)
+```bash
+cd bots
+docker compose up -d --build        # 5 bot services + dashboard
+docker compose ps                   # all should turn healthy within ~1 min
+docker compose logs -f resolver     # JSON logs
+```
+
+- Dashboard: http://localhost:4173 (the `web` service proxies `/api` to the relayer) · relayer: http://localhost:8080
+- One image for all bots, one service per bot; each uses its own key from `.env`. Values meant for the host
+  (`RELAYER_URL`, `STATE_DIR`) are overridden in `docker-compose.yml`.
+- State lives in `bots/.state` on the host, so you can switch between `npm run all` and Docker without losing
+  order history or APY samples — but never run both at once (shared keys → nonce collisions).
+- Containers run as non-root; `.env` and `.state` are excluded from every image.
+- If your user isn't in the `docker` group, prefix commands with `sudo`.
 
 ## Relayer API
 
