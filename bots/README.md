@@ -26,23 +26,16 @@ script deploys them (unmodified) and this relayer stands in for the 1inch order 
 
 ## Run on Base Sepolia
 
-You need Foundry, Node ≥ 22 and Base Sepolia ETH on three **fresh** keys: deployer (~0.02 ETH), keeper and operator
-(~0.005 ETH each). Never use anvil/hardhat test keys on a public testnet — they are EIP-7702-delegated to sweepers
+You need Foundry, Node ≥ 22 and Base Sepolia ETH on the **deployer** (~0.03 ETH); `npm run setup` forwards gas to
+the keeper, operator and maker wallets. Use fresh keys. Never use anvil/hardhat test keys on a public testnet — they are EIP-7702-delegated to sweepers
 (the bots refuse to run with such wallets).
 
 ```bash
-# 1. Contracts (from repo root)
-cd contracts
-KEEPER=<keeper address> OPERATOR=<operator address> \
-  forge script script/Deploy.s.sol --rpc-url https://sepolia.base.org --private-key $DEPLOYER_PRIVATE_KEY \
-  --broadcast --slow
-# → contracts/deployments/84532.json
-
-# 2. Bots
-cd ../bots
+cd bots
 npm ci
-cp .env.example .env        # fill RPC_URL, the three keys and a fresh MAKER_MNEMONIC
-npm run setup               # sends gas ETH to maker wallets
+cp .env.example .env        # fill RPC_URL, the three keys and a fresh MAKER_MNEMONIC (bots load .env themselves)
+npm run deploy              # forge Deploy.s.sol with the .env keys → contracts/deployments/84532.json
+npm run setup               # gas ETH from the deployer to keeper, operator and makers
 npm run seed                # LP liquidity: markets, strategy A, three inventory profiles
 npm run all                 # every bot in one process — or one per terminal:
 #   npm run relayer · npm run sim · npm run keeper · npm run resolver · npm run maker

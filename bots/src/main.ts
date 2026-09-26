@@ -3,11 +3,12 @@
  *
  *   relayer | resolver | keeper | maker | sim   run one bot
  *   all                                         run every bot in this process (relayer first)
- *   setup                                       fund maker wallets with gas (needs DEPLOYER_PRIVATE_KEY)
+ *   setup                                       fund keeper, operator and maker wallets with gas from the deployer
  *   seed                                        mock only: deposit initial LP liquidity into every vault
  *   order --side buy-eth|sell-eth --usd 1000     post one intent from maker #0
  *   status                                      print both strategies' on-chain state
  */
+import './env.ts'
 import { createServer } from 'node:http'
 import { parseArgs } from 'node:util'
 
@@ -15,7 +16,7 @@ import { createContext } from './chain.ts'
 import { startKeeper } from './keeper.ts'
 import { logger } from './log.ts'
 import { statuses } from './loop.ts'
-import { makers, placeOrder, setupMakers, startMaker, type Side } from './maker.ts'
+import { fundRoles, makers, placeOrder, setupMakers, startMaker, type Side } from './maker.ts'
 import { startRelayer } from './relayer.ts'
 import { relayerClient } from './relayer-client.ts'
 import { startResolver } from './resolver.ts'
@@ -73,6 +74,7 @@ async function main() {
 
   switch (command) {
     case 'setup':
+      await fundRoles(ctx)
       return setupMakers(ctx)
     case 'status':
       return printStatus(ctx)

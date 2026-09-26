@@ -15,6 +15,7 @@
     "maker": "tsx src/main.ts maker",
     "sim": "tsx src/main.ts sim",
     "all": "tsx src/main.ts all",
+    "deploy": "tsx scripts/deploy.ts",
     "setup": "tsx src/main.ts setup",
     "seed": "tsx src/main.ts seed",
     "order": "tsx src/main.ts order",

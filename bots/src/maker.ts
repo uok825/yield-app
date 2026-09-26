@@ -36,6 +36,25 @@ export function makers(ctx: Context): Maker[] {
   })
 }
 
+/** Tops up the keeper and operator wallets with gas ETH from the deployer, so only the deployer needs funding. */
+export async function fundRoles(ctx: Context, gasEth = parseEther(process.env.ROLE_GAS_ETH ?? '0.004')) {
+  const funder = ctx.wallet('deployer')
+  for (const role of ['keeper', 'operator'] as const) {
+    const key = ctx.cfg.keys[role]
+    if (!key) continue
+    const address = privateKeyToAccount(key).address
+    await assertCleanWallets(ctx, [address])
+    const balance = await ctx.client.getBalance({ address })
+    if (balance >= gasEth / 2n) {
+      log.info(`${role} funded`, { address, eth: formatUnits(balance, 18) })
+      continue
+    }
+    const hash = await funder.sendTransaction({ to: address, value: gasEth })
+    await ctx.client.waitForTransactionReceipt({ hash })
+    log.info(`sent gas to ${role}`, { address, eth: formatUnits(gasEth, 18), tx: ctx.txUrl(hash) })
+  }
+}
+
 /** Tops up every maker with gas ETH from the deployer. */
 export async function setupMakers(ctx: Context, gasEth = parseEther(process.env.MAKER_GAS_ETH ?? '0.002')) {
   const funder = ctx.wallet('deployer')
