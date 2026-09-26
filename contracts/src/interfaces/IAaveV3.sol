@@ -16,3 +16,30 @@ interface IAaveV3AToken {
 
     function balanceOf(address account) external view returns (uint256);
 }
+
+/// @notice Aave V3 Pool subset for borrowing against supplied collateral.
+interface IAaveV3CreditPool is IAaveV3Pool {
+    function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)
+        external;
+
+    function repay(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf)
+        external
+        returns (uint256);
+
+    function getUserAccountData(address user)
+        external
+        view
+        returns (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            uint256 availableBorrowsBase,
+            uint256 currentLiquidationThreshold,
+            uint256 ltv,
+            uint256 healthFactor
+        );
+}
+
+/// @notice Aave price oracle: USD prices with 8 decimals (the same prices Aave liquidates with).
+interface IAaveOracle {
+    function getAssetPrice(address asset) external view returns (uint256);
+}

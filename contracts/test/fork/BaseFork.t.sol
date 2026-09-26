@@ -12,6 +12,8 @@ import {OracleSwapApp} from "../../src/OracleSwapApp.sol";
 import {YieldResolver} from "../../src/YieldResolver.sol";
 import {ERC4626Adapter} from "../../src/adapters/ERC4626Adapter.sol";
 import {InventoryVault} from "../../src/InventoryVault.sol";
+import {CarryVault} from "../../src/CarryVault.sol";
+import {IAaveV3CreditPool, IAaveOracle} from "../../src/interfaces/IAaveV3.sol";
 import {IChainlinkAggregator} from "../../src/interfaces/IChainlinkAggregator.sol";
 import {AaveV3Adapter} from "../../src/adapters/AaveV3Adapter.sol";
 import {IAaveV3Pool, IAaveV3AToken} from "../../src/interfaces/IAaveV3.sol";
@@ -300,5 +302,106 @@ contract ForkTaker {
     {
         IERC20(token).approve(address(aqua), amount + fee);
         aqua.push(maker, address(app), hash, token, amount + fee);
+    }
+}
+
+/// @notice CarryVault against real Base contracts: Aave V3 (WETH collateral, USDC variable debt, Aave oracle) and
+///         real Morpho USDC vaults as sinks. Skipped unless BASE_RPC_URL is set.
+contract BaseCarryForkTest is Test {
+    IERC20 internal constant USDC = IERC20(0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913);
+    IERC20 internal constant WETH = IERC20(0x4200000000000000000000000000000000000006);
+    address internal constant AAVE_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+    address internal constant AAVE_AWETH = 0xD4a0e0b9149BCee3C920d2E00b5dE09138fd8bb7;
+    address internal constant AAVE_USDC_DEBT = 0x59dca05b6c26dbd64b5381374aAaC5CD05644C28;
+    address internal constant AAVE_ORACLE = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
+    address internal constant STEAKHOUSE_USDC = 0xbeeF010f9cb27031ad51e3333f9aF9C6B1228183;
+    address internal constant GAUNTLET_PRIME_USDC = 0xeE8F4eC5672F09119b96Ab6fB59C27E1b7e44b61;
+
+    address internal owner = makeAddr("owner");
+    address internal lp = makeAddr("lp");
+    CarryVault internal carry;
+    bool internal enabled;
+
+    function setUp() public {
+        string memory rpc = vm.envOr("BASE_RPC_URL", string(""));
+        if (bytes(rpc).length == 0) return;
+        vm.createSelectFork(rpc);
+        enabled = true;
+        carry = new CarryVault(
+            CarryVault.Config({
+                asset: WETH,
+                pool: IAaveV3CreditPool(AAVE_POOL),
+                aCollateral: IERC20(AAVE_AWETH),
+                debtAsset: USDC,
+                debtToken: IERC20(AAVE_USDC_DEBT),
+                oracle: IAaveOracle(AAVE_ORACLE),
+                owner: owner,
+                keeper: owner,
+                maxLtvBps: 3_000,
+                deleverageLtvBps: 4_000,
+                name: "YieldSolver Carry WETH",
+                symbol: "ycWETH"
+            })
+        );
+        vm.startPrank(owner);
+        carry.setSink(STEAKHOUSE_USDC, 10_000_000e6);
+        carry.setSink(GAUNTLET_PRIME_USDC, 10_000_000e6);
+        vm.stopPrank();
+    }
+
+    function test_fork_carryLifecycle() public {
+        if (!enabled) {
+            vm.skip(true);
+            return;
+        }
+        deal(address(WETH), lp, 10e18);
+        vm.startPrank(lp);
+        WETH.approve(address(carry), 10e18);
+        uint256 shares = carry.deposit(10e18, lp);
+        vm.stopPrank();
+        assertApproxEqAbs(carry.collateral(), 10e18, 2);
+
+        // Borrow ~28% of collateral value in USDC and park it in Steakhouse (Morpho).
+        uint256 ethUsd = IAaveOracle(AAVE_ORACLE).getAssetPrice(address(WETH)); // 8 dp
+        uint256 borrow = 10 * ethUsd * 28 / 100 / 100; // USDC 6 dp
+        vm.prank(owner);
+        carry.open(STEAKHOUSE_USDC, borrow, 0);
+        assertLe(carry.ltvBps(), 3_000);
+
+        // A stranger can't touch a healthy position.
+        vm.prank(lp);
+        vm.expectPartialRevert(CarryVault.NotUnsafe.selector);
+        carry.deleverage(1);
+
+        // A day of real Aave borrow interest and real Morpho supply yield.
+        skip(1 days);
+        vm.roll(block.number + 43_200);
+        assertGt(carry.debt(), borrow);
+        assertGt(carry.stableHeld(), borrow - 2);
+
+        // Move the stable leg to another Morpho vault.
+        uint256 sh = IERC20(STEAKHOUSE_USDC).balanceOf(address(carry));
+        vm.prank(owner);
+        carry.rotate(STEAKHOUSE_USDC, GAUNTLET_PRIME_USDC, sh);
+        assertEq(IERC20(STEAKHOUSE_USDC).balanceOf(address(carry)), 0);
+
+        // ETH halves at the Aave oracle → LTV ~56% → anyone may deleverage.
+        vm.mockCall(
+            AAVE_ORACLE,
+            abi.encodeWithSelector(IAaveOracle.getAssetPrice.selector, address(WETH)),
+            abi.encode(ethUsd / 2)
+        );
+        assertGt(carry.ltvBps(), 4_000);
+        vm.prank(lp);
+        carry.deleverage(type(uint256).max);
+        assertLt(carry.ltvBps(), 100);
+        vm.clearMockedCalls();
+
+        // LP exits: everything except the collateral backing any residual (negative-carry) debt.
+        uint256 max = carry.maxRedeem(lp);
+        vm.prank(lp);
+        uint256 out = carry.redeem(max, lp, lp);
+        assertGt(out, 9.9e18);
+        assertLe(max, shares);
     }
 }

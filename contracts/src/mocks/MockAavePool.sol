@@ -76,6 +76,13 @@ contract MockAToken {
         _grow(rateWad);
     }
 
+    /// @notice Credit markets: pass borrowers' accrued interest (in assets) on to suppliers.
+    function accrueFromMarket(uint256 interest) external onlyPool {
+        uint256 supply = Math.mulDiv(scaledTotalSupply, liquidityIndex, RAY);
+        if (supply == 0 || interest == 0) return;
+        _grow(Math.mulDiv(interest, 1e18, supply));
+    }
+
     function lockLiquidity(address to, uint256 amount) external onlyPool {
         IERC20(UNDERLYING_ASSET_ADDRESS).safeTransfer(to, amount);
     }
