@@ -15,8 +15,8 @@ keeper that manages both strategies, simulated makers, and a testnet world simul
 | Bot | Key | What it does |
 |---|---|---|
 | `relayer` | — | Accepts signed Fusion orders, validates them (hash, EIP-712 signature against the deployed LOP domain, settlement, resolver whitelist, balance/allowance, expiry), serves them to resolvers, tracks `OrderFilled` / `OrderCancelled` and nonce invalidation. JSON store with atomic writes. |
-| `resolver` | `OPERATOR` | For each active order, computes the current Dutch-auction amount, simulates **B** (buy from each inventory profile via `OracleSwapApp`) and **A** (JIT USDC from the YieldVault + router leg), and fills with the most profitable route once net profit (after gas) clears the floor. `minProfit` is enforced on-chain. |
-| `keeper` | `KEEPER` | **A:** measures each market's APY from its supply index over a rolling window, moves capital toward `apy × trust`, keeps the reserve, reorders the withdraw queue (with hysteresis). **B:** keeps an idle buffer per asset, lends the rest on Aave, swaps back to target when a profile leaves its band. |
+| `resolver` | `OPERATOR` | Also prices **self-custody** routes per wallet strategy: `wallet-mm` (buy from a wallet's committed shares via `AquaYieldApp`) and `wallet-jit` (borrow from them), filled through `WalletResolver`. For each active order, computes the current Dutch-auction amount, simulates **B** (buy from each inventory profile via `OracleSwapApp`) and **A** (JIT USDC from the YieldVault + router leg), and fills with the most profitable route once net profit (after gas) clears the floor. `minProfit` is enforced on-chain. |
+| `keeper` | `KEEPER` | **Self-custody:** for every wallet strategy naming this keeper, moves each side's shares to the best listed market (apy × trust) when the gain ≥ `KEEPER_WALLET_MIN_GAIN_PCT`, at most once per `KEEPER_WALLET_COOLDOWN_SEC`; shares stay in the wallet. **A:** measures each market's APY from its supply index over a rolling window, moves capital toward `apy × trust`, keeps the reserve, reorders the withdraw queue (with hysteresis). **B:** keeps an idle buffer per asset, lends the rest on Aave, swaps back to target when a profile leaves its band. |
 | `maker` | `MAKER_MNEMONIC` | Simulated users posting real Fusion orders (USDC⇄WETH) priced off the oracle, auction from +0.5% to −1%. |
 | `sim` | `DEPLOYER` | Mock deployments only: mirrors Chainlink ETH/USD from Base mainnet into the mock oracle, keeps the mock router near oracle, accrues interest on mock markets. |
 
@@ -36,7 +36,7 @@ npm ci
 cp .env.example .env        # fill RPC_URL, the three keys and a fresh MAKER_MNEMONIC (bots load .env themselves)
 npm run deploy              # forge Deploy.s.sol with the .env keys → contracts/deployments/84532.json
 npm run setup               # gas ETH from the deployer to keeper, operator and makers
-npm run seed                # LP liquidity: markets, strategy A, three inventory profiles
+npm run seed                # LP liquidity: markets, strategy A, three inventory profiles, self-custody LP wallets
 npm run all                 # every bot in one process — or one per terminal:
 #   npm run relayer · npm run sim · npm run keeper · npm run resolver · npm run maker
 ```
@@ -94,7 +94,8 @@ E2E_FORK_URL=https://sepolia.base.org PRICE_SOURCE_RPC_URL=https://mainnet.base.
                   # same on a Base Sepolia fork (chain id 84532, Chainlink mirror)
 ```
 
-The e2e asserts that makers post orders, most orders get filled, **both** routes are used, every fill is reported,
+The e2e also asserts the self-custody mode: wallets ship strategies, orders get filled from wallet liquidity, the
+keeper moves wallet shares to a better market and the wallets earn. It asserts that makers post orders, most orders get filled, **both** routes are used, every fill is reported,
 the keeper allocates strategy A and the inventories stay funded.
 
 ## Operating notes
