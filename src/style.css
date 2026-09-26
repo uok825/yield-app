@@ -837,3 +837,26 @@ a.muted { color: var(--muted); }
 }
 .sc-hint { margin: 10px 0 0; font-size: 12px; }
 .note.is-info { color: var(--muted); }
+
+/* ── Frameless ───────────────────────────────
+   Only the strategy switcher (self-custody · A · B · C) and form controls keep a box; sections, stat rows and
+   inner panels sit directly on the page, separated by whitespace. */
+.card, .sc-hero, .carry-hero, .o-sc, .o-intent { background: none; border: 0; border-radius: 0; padding: 0; }
+.col-main, .col-side { gap: 44px; }
+.grid { gap: 48px; }
+.sc-hero { margin-bottom: 36px; }
+.switcher { margin-bottom: 36px; }
+.stats { background: none; border: 0; border-radius: 0; gap: 8px 32px; margin-bottom: 40px; }
+.stats .stat { border: 0 !important; padding: 0; }
+.stats-6 { row-gap: 22px; }
+.sc-step, .dec-now, .review, .sc-active .sc-budgets { background: none; border: 0; border-radius: 0; padding-left: 0; padding-right: 0; }
+.custody-line, .carry-guard { background: none; padding-left: 0; padding-right: 0; }
+.banner { border: 0; border-radius: 0; background: none; padding: 0; }
+@media (max-width: 960px) {
+  .grid { gap: 44px; }
+}
+@media (max-width: 560px) {
+  .card { padding: 0; }
+  .stat { padding: 0; }
+  .stats { gap: 18px 20px; }
+}
