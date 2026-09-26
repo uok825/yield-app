@@ -12,6 +12,7 @@ import {
   type Transport,
   BaseError,
   ContractFunctionRevertedError,
+  WaitForTransactionReceiptTimeoutError,
   createPublicClient,
   createWalletClient,
   defineChain,
@@ -102,11 +103,13 @@ export function revertReason(err: unknown): string {
 }
 
 const STALE_READ_RETRIES = 4
+const MAX_SENDS = 4
+const RECEIPT_TIMEOUT_MS = 60_000
 const TRANSIENT = /nonce too low|replacement transaction underpriced|already known|timeout|ECONNRESET|fetch failed|HTTP request failed|rate limit|429|503/i
 
 /**
  * Simulates, sends and waits for a contract write. Reverts surface as decoded errors before anything is broadcast.
- * Transient RPC / nonce errors are retried with a fresh nonce.
+ * Transient RPC errors and dropped / unmined transactions are re-sent with a resynced nonce and a bumped fee.
  */
 export async function write<
   const abi extends Abi,
@@ -118,6 +121,7 @@ export async function write<
   params: { address: Address; abi: abi; functionName: name; args?: args; value?: bigint; gas?: bigint },
   label = String(params.functionName),
 ): Promise<TransactionReceipt> {
+  let sends = 0
   for (let attempt = 1; ; attempt++) {
     let request
     try {
@@ -132,6 +136,8 @@ export async function write<
       }
       throw new Error(`${label} failed: ${revertReason(err)}`)
     }
+
+    let hash: Hex | undefined
     try {
       // Headroom over the estimate: a lagging RPC node can estimate against older state (e.g. a storage slot that is
       // still zero there costs 20k more to write). Gas on Base is cheap; out-of-gas reverts are not.
@@ -139,23 +145,42 @@ export async function write<
         const estimate = await ctx.client.estimateContractGas({ ...(params as any), account: wallet.account })
         ;(request as any).gas = (estimate * 13n) / 10n + 25_000n
       }
-      const hash = await wallet.writeContract(request as any)
-      const receipt = await ctx.client.waitForTransactionReceipt({ hash, timeout: 120_000 })
-      if (receipt.status !== 'success') throw new Error(`${label} reverted on-chain: ${ctx.txUrl(hash)}`)
+      // Re-sends replace a possibly stuck tx with the same nonce, so they need a higher fee.
+      if (sends > 0) {
+        const fees = await ctx.client.estimateFeesPerGas()
+        const bump = BigInt(100 + 25 * sends)
+        ;(request as any).maxFeePerGas = (fees.maxFeePerGas! * bump) / 100n
+        ;(request as any).maxPriorityFeePerGas = (fees.maxPriorityFeePerGas! * bump) / 100n
+      }
+      sends++
+      hash = await wallet.writeContract(request as any)
+      const receipt = await ctx.client.waitForTransactionReceipt({ hash, timeout: RECEIPT_TIMEOUT_MS })
+      if (receipt.status !== 'success') throw new OnChainRevert(`${label} reverted on-chain: ${ctx.txUrl(hash)}`)
       log.debug(`${label} mined`, { tx: ctx.txUrl(hash), gas: receipt.gasUsed })
       return receipt
     } catch (err) {
+      if (err instanceof OnChainRevert) throw err
+      // Whatever happened after a send attempt (RPC error, dropped tx), the local nonce may now be ahead of the
+      // chain; left alone, every later tx waits behind a gap forever. Always resync from the chain.
+      nonceManager.reset({ address: wallet.account.address, chainId: ctx.chain.id })
+      const timedOut = err instanceof WaitForTransactionReceiptTimeoutError
+      if (hash && timedOut) {
+        const late = await ctx.client.getTransactionReceipt({ hash }).catch(() => undefined)
+        if (late?.status === 'success') return late
+        if (late) throw new Error(`${label} reverted on-chain: ${ctx.txUrl(hash)}`)
+      }
       const reason = revertReason(err)
-      if (attempt < 4 && TRANSIENT.test(reason)) {
-        nonceManager.reset({ address: wallet.account.address, chainId: ctx.chain.id })
-        log.warn(`${label}: transient error, retrying`, { attempt, reason })
-        await sleep(1_000 * attempt)
+      if (sends < MAX_SENDS && (timedOut || TRANSIENT.test(reason))) {
+        log.warn(`${label}: ${timedOut ? 'not mined in time' : 'transient error'}, re-sending`, { sends, reason })
+        await sleep(1_000 * sends)
         continue
       }
       throw new Error(`${label} failed: ${reason}`)
     }
   }
 }
+
+class OnChainRevert extends Error {}
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 

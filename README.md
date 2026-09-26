@@ -25,24 +25,24 @@ aqua-app/
 ├── public/
 │   └── favicon.svg             # Project branding favicon
 ├── src/
-│   ├── main.ts                 # Page layout (A/B views), history seed, simulation loops
-│   ├── config.ts               # A: markets, reserve ratio · B: profiles, spread/skew/band · timings
-│   ├── types.ts                # A: Market, Fill, State · B: Profile, MmEvent, MmState
-│   ├── store.ts                # Minimal reactive stores for A and B (pure updaters)
-│   ├── format.ts               # USD / % / number / time formatters, DOM query helper
-│   ├── engine/
-│   │   ├── vault.ts            # ERC-4626 share math, rebalance (15% reserve), APY drift, draws
-│   │   ├── resolver.ts         # Simulated Fusion orders: auction → JIT loan → repay + fee
-│   │   └── mm.ts               # B: oracle walk, skewed bid/ask, routing, band checks, keeper, in-kind shares
+│   ├── main.ts                 # Layout (A/B views + shared sidebar), boot/error states, live polling loops
+│   ├── config.ts               # VITE_RPC_URL / VITE_RELAYER_URL, Base Sepolia chain, poll cadence, display names
+│   ├── api.ts                  # Relayer client: snapshot, orders, quote, submit (bigint parsing, route helper)
+│   ├── chain.ts                # viem public/wallet clients, injected wallet, batched balance reads, tx + revert decoding
+│   ├── store.ts                # Minimal reactive store: snapshot, fills, wallet, balances
+│   ├── format.ts               # USD / token / bps / time formatters, amount parsing, DOM query helper
 │   ├── components/
-│   │   ├── topbar.ts           # Logo, Base pill, demo label, mock wallet
+│   │   ├── topbar.ts           # Logo, "Base Sepolia · live" pill with block pulse, wallet button
 │   │   ├── switcher.ts         # Strategy A / B selector (remembered in localStorage)
-│   │   ├── stats.ts            # Stat rows: A (TVL, APY, JIT fees) and B (TVL, net APY, oracle, fills)
-│   │   ├── allocation.ts       # A: stacked bar + market list with sparklines
-│   │   ├── profiles.ts         # B: per-profile ratio bar with band, skew, bid/ask, status
-│   │   ├── fills.ts            # Recent fills: A (JIT loans) and B (inventory fills, rejects, keeper)
-│   │   ├── deposit.ts          # A: deposit / withdraw card and user position
-│   │   └── mm-deposit.ts       # B: USDC + ETH deposit with band check, in-kind withdraw
+│   │   ├── stats.ts            # Stat rows: A (TVL, share price, JIT fees, reserve) and B (TVL, oracle, spread income, APY)
+│   │   ├── allocation.ts       # A: markets table with allocation bars and the liquid reserve
+│   │   ├── profiles.ts         # B: per-profile ratio bar with band, bid/ask, skew, income, status
+│   │   ├── fills.ts            # Recent resolver fills: 'jit' route for A, 'inventory:i' routes for B
+│   │   ├── intent.ts           # 1inch Fusion intent: quote → approve → sign → live auction tracking
+│   │   ├── deposit.ts          # A: ERC-4626 deposit / redeem
+│   │   ├── mm-deposit.ts       # B: USDC + WETH deposit with band pre-check, in-kind redeem
+│   │   ├── wallet.ts           # Connection, network switch, balances, positions, test-token faucet
+│   │   └── tx.ts               # Shared pending / confirmed / failed transaction status line
 │   └── style.css               # Design tokens, dark + light themes
 └── aqua.md                     # Hackathon project specification
 ```

@@ -1,50 +1,32 @@
-import { totalAssets } from '../engine/vault.ts';
-import { $, pct, usd } from '../format.ts';
+import { addrUrl } from '../chain.ts';
+import { MARKET_NAMES } from '../config.ts';
+import { $, esc, pct, short, units, usd } from '../format.ts';
 import { store } from '../store.ts';
-import type { Market, State } from '../types.ts';
 
 interface Row {
-  id: string;
+  id: string; // color key
   name: string;
   note: string;
+  href: string | null;
   amount: number;
-  apy: number | null;
-  history: number[];
-}
-
-function sparkline(data: number[]): string {
-  if (data.length < 2) return '<svg class="spark" aria-hidden="true"></svg>';
-  const w = 72;
-  const h = 22;
-  const min = Math.min(...data);
-  const range = Math.max(...data) - min || 1;
-  const pts = data.map((v, i) => `${((i / (data.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / range) * (h - 4)).toFixed(1)}`);
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><polyline points="${pts.join(' ')}" /></svg>`;
-}
-
-const marketRow = (m: Market): Row => ({ id: m.id, name: m.name, note: 'Lending market', amount: m.balance, apy: m.apy, history: m.history });
-
-function rows(s: State): Row[] {
-  const reserve: Row = { id: 'reserve', name: 'Liquid reserve', note: 'Lent just-in-time to fills', amount: s.reserve, apy: null, history: [] };
-  const lent: Row[] = s.inFlight > 0.005 ? [{ id: 'inflight', name: 'Lent to resolver', note: 'Repaid in the same tx', amount: s.inFlight, apy: null, history: [] }] : [];
-  return [...s.markets.map(marketRow), reserve, ...lent];
+  apy: number | null | 'reserve';
 }
 
 export function mountAllocation(root: HTMLElement): void {
   root.innerHTML = `
     <header class="card-head">
       <div>
-        <h2>Allocation</h2>
-        <p class="muted">Weighted by APY × trust score. 15% stays liquid for fills.</p>
+        <h2>Markets</h2>
+        <p class="muted">Capital is spread across lending markets by the keeper; a liquid reserve funds just-in-time loans to the resolver.</p>
       </div>
+      <a class="head-link num" data-vault target="_blank" rel="noopener"></a>
     </header>
     <div class="bar" role="img" aria-label="Allocation by market"></div>
     <div class="alloc-list" role="table" aria-label="Allocation by market">
       <div class="alloc-row alloc-headrow" role="row">
         <span role="columnheader">Market</span>
-        <span role="columnheader" class="hide-sm">APY trend</span>
         <span role="columnheader" class="r">APY</span>
-        <span role="columnheader" class="r hide-sm">Share</span>
+        <span role="columnheader">Share of TVL</span>
         <span role="columnheader" class="r">Amount</span>
       </div>
       <div class="alloc-body"></div>
@@ -52,31 +34,50 @@ export function mountAllocation(root: HTMLElement): void {
 
   const bar = $(root, '.bar');
   const body = $(root, '.alloc-body');
+  const vaultLink = $<HTMLAnchorElement>(root, '[data-vault]');
 
-  store.subscribe((s) => {
-    const total = totalAssets(s) || 1;
-    const list = rows(s);
+  store.subscribe(({ snapshot }) => {
+    if (!snapshot) return;
+    const a = snapshot.strategyA;
+    vaultLink.href = addrUrl(a.vault);
+    vaultLink.textContent = `YieldVault ${short(a.vault)} ↗`;
+
+    const rows: Row[] = [
+      ...[...a.markets]
+        .sort((x, y) => (y.assets > x.assets ? 1 : -1))
+        .map((m) => ({
+          id: m.name in MARKET_NAMES ? m.name : 'reserve',
+          name: MARKET_NAMES[m.name] ?? m.name,
+          note: `Adapter ${short(m.adapter)}`,
+          href: addrUrl(m.adapter),
+          amount: units(m.assets, 6),
+          apy: m.apy,
+        })),
+      { id: 'reserve', name: 'Liquid reserve', note: `Target ${pct(a.reserveBps / 100, 0)} · lent JIT to fills`, href: null, amount: units(a.idle, 6), apy: 'reserve' },
+    ];
+    const total = units(a.tvl, 6) || 1;
     const share = (r: Row) => (r.amount / total) * 100;
 
-    bar.innerHTML = list
-      .map((r) => `<span class="seg c-${r.id}" style="flex-grow:${Math.max(0, r.amount)}" title="${r.name}: ${usd(r.amount)} (${pct(share(r), 1)})"></span>`)
+    bar.innerHTML = rows
+      .map((r) => `<span class="seg c-${r.id}" style="flex-grow:${Math.max(0, r.amount)}" title="${esc(r.name)}: ${usd(r.amount)} (${pct(share(r), 1)})"></span>`)
       .join('');
-    bar.setAttribute('aria-label', list.map((r) => `${r.name} ${pct(share(r), 1)}`).join(', '));
+    bar.setAttribute('aria-label', rows.map((r) => `${r.name} ${pct(share(r), 1)}`).join(', '));
 
-    body.innerHTML = list
-      .map(
-        (r) => `
+    body.innerHTML = rows
+      .map((r) => {
+        const apy = r.apy === 'reserve' ? '<span class="muted">—</span>' : r.apy === null ? '<span class="muted measuring">measuring…</span>' : pct(r.apy);
+        const note = r.href ? `<a class="muted" href="${r.href}" target="_blank" rel="noopener">${r.note}</a>` : `<small class="muted">${r.note}</small>`;
+        return `
       <div class="alloc-row" role="row">
         <span role="cell" class="alloc-name">
           <i class="swatch c-${r.id}"></i>
-          <span><b>${r.name}</b><small class="muted">${r.note}</small></span>
+          <span><b>${esc(r.name)}</b>${r.href ? `<small>${note}</small>` : note}</span>
         </span>
-        <span role="cell" class="hide-sm c-${r.id}">${sparkline(r.history)}</span>
-        <span role="cell" class="r num">${r.apy === null ? '<span class="muted">—</span>' : pct(r.apy)}</span>
-        <span role="cell" class="r num hide-sm muted">${pct(share(r), 1)}</span>
+        <span role="cell" class="r num">${apy}</span>
+        <span role="cell" class="share-cell c-${r.id}"><span class="minibar"><i style="width:${Math.min(100, share(r)).toFixed(2)}%"></i></span><span class="num muted">${pct(share(r), 1)}</span></span>
         <span role="cell" class="r num">${usd(r.amount, 0)}</span>
-      </div>`,
-      )
+      </div>`;
+      })
       .join('');
   });
 }

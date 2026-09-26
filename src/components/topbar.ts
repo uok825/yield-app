@@ -1,7 +1,7 @@
+import { connect, switchNetwork } from '../chain.ts';
+import { CHAIN_ID } from '../config.ts';
+import { $, short } from '../format.ts';
 import { store } from '../store.ts';
-import { $ } from '../format.ts';
-
-const MOCK_ADDRESS = '0x71C4…4e89';
 
 export function mountTopbar(root: HTMLElement): void {
   root.innerHTML = `
@@ -13,17 +13,46 @@ export function mountTopbar(root: HTMLElement): void {
         </svg>
         <span>YieldSolver</span>
       </a>
-      <span class="pill"><span class="dot"></span>Base</span>
-      <span class="demo-label" title="No chain connection. All balances, rates and orders are simulated.">Demo · simulated data</span>
+      <span class="pill live-pill" data-live><span class="dot"></span><span data-live-text>Base Sepolia</span></span>
+      <span class="block-label num muted" data-block></span>
       <button class="btn btn-secondary wallet-btn" type="button"></button>
     </div>`;
 
   const btn = $<HTMLButtonElement>(root, '.wallet-btn');
-  btn.addEventListener('click', () => store.update((s) => ({ walletConnected: !s.walletConnected })));
+  const pill = $(root, '[data-live]');
+  const blockEl = $(root, '[data-block]');
+  let lastBlock = 0n;
 
-  store.subscribe((s) => {
-    btn.textContent = s.walletConnected ? MOCK_ADDRESS : 'Connect wallet';
-    btn.classList.toggle('is-connected', s.walletConnected);
-    btn.title = s.walletConnected ? 'Disconnect (mock wallet)' : 'Connect a mock wallet';
+  btn.addEventListener('click', () => {
+    const w = store.get().wallet;
+    if (w.status === 'disconnected') void connect();
+    else if (w.status === 'connected' && w.chainId !== CHAIN_ID) void switchNetwork().catch(() => undefined);
+    else document.querySelector('.area-wallet')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+
+  store.subscribe(({ snapshot, snapshotError, wallet }) => {
+    const live = !!snapshot && !snapshotError;
+    pill.classList.toggle('is-live', live);
+    pill.classList.toggle('is-down', !!snapshotError);
+    $(pill, '[data-live-text]').textContent = snapshotError ? 'Base Sepolia · reconnecting' : 'Base Sepolia · live';
+    pill.title = snapshotError ?? 'Reading live contract state from Base Sepolia (chain 84532).';
+    if (snapshot && snapshot.block !== lastBlock) {
+      lastBlock = snapshot.block;
+      blockEl.textContent = `#${snapshot.block.toLocaleString('en-US')}`;
+      blockEl.title = 'Latest block seen by the relayer';
+      pill.classList.remove('pulse');
+      void pill.offsetWidth; // restart the pulse animation
+      pill.classList.add('pulse');
+    }
+
+    const wrongChain = wallet.status === 'connected' && wallet.chainId !== CHAIN_ID;
+    btn.className = `btn wallet-btn ${wrongChain ? 'btn-warn' : 'btn-secondary'}${wallet.status === 'connected' && !wrongChain ? ' is-connected' : ''}`;
+    btn.disabled = wallet.status === 'connecting';
+    btn.textContent =
+      wallet.status === 'none' ? 'No wallet'
+      : wallet.status === 'connecting' ? 'Connecting…'
+      : wallet.status === 'disconnected' ? 'Connect wallet'
+      : wrongChain ? 'Switch to Base Sepolia'
+      : short(wallet.address!);
   });
 }

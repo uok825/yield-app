@@ -1,99 +1,73 @@
-import { $, ago, num, usd } from '../format.ts';
-import { mmStore, store } from '../store.ts';
-import type { Fill, MmEvent, MmState, State } from '../types.ts';
+import { type OrderRecord, type Snapshot, parseRoute } from '../api.ts';
+import { txUrl, usdValue } from '../chain.ts';
+import { PROFILE_NAMES } from '../config.ts';
+import { $, ago, type Token, tok, usd } from '../format.ts';
+import { store } from '../store.ts';
 
-function sourceLabel(f: Fill, s: State): string {
-  if (f.status === 'auction') return '<span class="muted">Waiting for auction</span>';
-  const names = f.draws.map((d) => (d.source === 'reserve' ? 'Reserve' : s.markets.find((m) => m.id === d.source)?.name ?? d.source));
-  const title = f.draws.map((d, i) => `${names[i]}: ${usd(d.amount)}`).join('\n');
-  return `<span title="${title}">${names.join(' + ')}</span>`;
+const MAX_ROWS = 10;
+
+export function symbolOf(token: string, snap: Snapshot): Token {
+  return token.toLowerCase() === snap.contracts.weth.toLowerCase() ? 'WETH' : 'USDC';
 }
 
-function status(f: Fill): string {
-  if (f.status === 'auction') return `<span class="status">Auction ${Math.round(f.progress)}%</span>`;
-  if (f.status === 'lending') return '<span class="status is-live">Filling</span>';
-  return '<span class="status is-done">Settled</span>';
+export const pairOf = (o: OrderRecord, snap: Snapshot) => `${symbolOf(o.makerAsset, snap)} → ${symbolOf(o.takerAsset, snap)}`;
+
+export function routeLabel(route: string | undefined): string {
+  const r = parseRoute(route);
+  if (!r) return '';
+  return r.kind === 'jit' ? 'Strategy A (JIT)' : `Strategy B · ${PROFILE_NAMES[r.index] ?? `profile ${r.index}`}`;
 }
 
-export function mountFills(root: HTMLElement): void {
-  root.innerHTML = `
-    <header class="card-head">
-      <div>
-        <h2>Recent fills</h2>
-        <p class="muted">1inch Fusion orders filled with vault liquidity, repaid with a fee.</p>
-      </div>
-    </header>
-    <div class="fills-head">
-      <span>Order</span><span class="r">Amount</span><span>Liquidity from</span><span class="r">Fee</span><span class="r">Status</span>
-    </div>
-    <ul class="fills"></ul>`;
-
-  const list = $(root, '.fills');
-
-  store.subscribe((s) => {
-    const now = Date.now();
-    list.innerHTML = s.fills.length
-      ? s.fills
-          .map(
-            (f) => `
-      <li class="fill">
-        <span class="fill-pair"><b>${f.pair}</b><small class="muted">${ago(now - f.createdAt)}</small></span>
-        <span class="fill-amount r num">${usd(f.amount, 0)}</span>
-        <span class="fill-src">${sourceLabel(f, s)}</span>
-        <span class="fill-fee r num ${f.status === 'settled' ? 'pos' : 'muted'}">${f.status === 'auction' ? '—' : '+' + usd(f.fee)}</span>
-        <span class="fill-status r">${status(f)}</span>
-      </li>`,
-          )
-          .join('')
-      : '<li class="empty muted">Waiting for Fusion orders…</li>';
-  });
-}
-
-/* ── Strategy B: intents filled from inventory ── */
-
-const signed = (v: number, text: string) => `${v < 0 ? '−' : '+'}${text}`;
-
-function mmRow(e: MmEvent, s: MmState, now: number): string {
-  const name = s.profiles.find((p) => p.id === e.profile)?.name ?? '';
-  const src = {
-    fill: `${name} <span class="muted">@ ${num(e.price)}</span>`,
-    keeper: `${name} <span class="muted">· DEX @ ${num(e.price)}</span>`,
-    rejected: '<span class="muted">No profile within band</span>',
-  }[e.kind];
-  const status = {
-    fill: '<span class="status is-done">Settled</span>',
-    keeper: '<span class="status is-live">Keeper rebalance</span>',
-    rejected: '<span class="status">Rejected · band</span>',
-  }[e.kind];
-  const none = e.kind === 'rejected';
+function row(o: OrderRecord, snap: Snapshot, now: number, source: string): string {
+  const hash = o.report?.tx ?? o.fillTx;
+  const profit = o.report ? usdValue(o.report.profit, o.report.profitToken, snap) : 0;
+  const profitTitle = o.report ? tok(o.report.profit, symbolOf(o.report.profitToken, snap)) : '';
   return `
     <li class="fill">
-      <span class="fill-pair"><b>${e.dir}</b><small class="muted">${ago(now - e.at)}</small></span>
-      <span class="fill-amount r num${none ? ' muted' : ''}">${usd(e.usd, 0)}</span>
-      <span class="fill-src">${src}</span>
-      <span class="fill-edge r num muted">${none ? '—' : signed(e.edgeBps, num(Math.abs(e.edgeBps), 1)) + ' bps'}</span>
-      <span class="fill-fee r num ${none ? 'muted' : e.income < 0 ? 'neg' : 'pos'}">${none ? '—' : signed(e.income, usd(Math.abs(e.income)))}</span>
-      <span class="fill-status r">${status}</span>
+      <span class="fill-pair"><b>${pairOf(o, snap)}</b><small class="muted">${ago(now - o.updatedAt)}</small></span>
+      <span class="fill-amount r num">${tok(o.makingAmount, symbolOf(o.makerAsset, snap))}</span>
+      <span class="fill-src">${source}</span>
+      <span class="fill-fee r num pos" title="${profitTitle}">+${usd(profit)}</span>
+      <span class="fill-status r">${hash ? `<a class="tx-link" href="${txUrl(hash)}" target="_blank" rel="noopener" aria-label="View fill transaction">Tx ↗</a>` : ''}</span>
     </li>`;
 }
 
-export function mountMmFills(root: HTMLElement): void {
-  root.classList.add('fills-b');
+/** Recent fills for one strategy: 'jit' routes for A, 'inventory:i' routes for B. */
+export function mountFills(root: HTMLElement, kind: 'jit' | 'inventory'): void {
+  const copy =
+    kind === 'jit'
+      ? 'Fusion intents the resolver filled with a just-in-time loan from the vault, repaid in the same transaction with a fee.'
+      : 'Fusion intents filled straight from a profile’s inventory at the oracle price ± spread.';
   root.innerHTML = `
     <header class="card-head">
       <div>
         <h2>Recent fills</h2>
-        <p class="muted">Intents filled straight from inventory at the oracle price ± spread. Edge and income are measured against the oracle.</p>
+        <p class="muted">${copy}</p>
       </div>
     </header>
     <div class="fills-head">
-      <span>Intent</span><span class="r">Amount</span><span>Profile · price</span><span class="r">Edge</span><span class="r">Income</span><span class="r">Status</span>
+      <span>Intent</span><span class="r">Sold</span><span>${kind === 'jit' ? 'Liquidity' : 'Profile'}</span><span class="r">Profit</span><span class="r">Tx</span>
     </div>
     <ul class="fills"></ul>`;
 
   const list = $(root, '.fills');
-  mmStore.subscribe((s) => {
+  let key = '';
+  store.subscribe(({ snapshot, fills }) => {
+    if (!snapshot) return;
+    const mine = fills.filter((o) => parseRoute(o.report?.route)?.kind === kind).slice(0, MAX_ROWS);
     const now = Date.now();
-    list.innerHTML = s.events.length ? s.events.map((e) => mmRow(e, s, now)).join('') : '<li class="empty muted">Waiting for intents…</li>';
+    // Re-render when rows change, and at most every ~5s for relative times.
+    const next = mine.map((o) => o.orderHash).join() + Math.floor(now / 5000);
+    if (next === key) return;
+    key = next;
+    list.innerHTML = mine.length
+      ? mine
+          .map((o) => {
+            const r = parseRoute(o.report?.route);
+            const source = r?.kind === 'inventory' ? `<b class="prof-tag">${PROFILE_NAMES[r.index] ?? r.index}</b>` : 'Vault loan · repaid + fee';
+            return row(o, snapshot, now, source);
+          })
+          .join('')
+      : `<li class="empty muted">${kind === 'jit' ? 'No JIT fills yet. The resolver lends from the vault when inventory can’t cover an intent.' : 'Waiting for intents…'}</li>`;
   });
 }

@@ -1,7 +1,5 @@
-import { apys, tvl } from '../engine/mm.ts';
-import { lendingApy, sharePrice, totalAssets } from '../engine/vault.ts';
-import { $, num, pct, usd } from '../format.ts';
-import { mmStore, store } from '../store.ts';
+import { $, ago, num, pct, units, usd } from '../format.ts';
+import { store } from '../store.ts';
 
 /** Renders a row of stat tiles and returns a setter for their value / subline. */
 function tiles(root: HTMLElement, defs: { key: string; label: string }[]) {
@@ -26,36 +24,48 @@ function tiles(root: HTMLElement, defs: { key: string; label: string }[]) {
 export function mountStats(root: HTMLElement): void {
   const set = tiles(root, [
     { key: 'tvl', label: 'Total value locked' },
-    { key: 'apy', label: 'Lending APY' },
-    { key: 'fees', label: 'Fees from JIT fills' },
-    { key: 'orders', label: 'Orders filled' },
+    { key: 'price', label: 'Share price' },
+    { key: 'fees', label: 'JIT fees earned' },
+    { key: 'reserve', label: 'Liquid reserve' },
   ]);
-  store.subscribe((s) => {
-    const reserveShare = totalAssets(s) > 0 ? (s.reserve / totalAssets(s)) * 100 : 0;
-    set('tvl', usd(totalAssets(s)), `Share price ${num(sharePrice(s), 5)}`);
-    set('apy', pct(lendingApy(s)), `Blended, ${pct(reserveShare, 0)} held idle`);
-    set('fees', usd(s.feesEarned), 'Paid back to the vault');
-    set('orders', num(s.filledCount, 0), `${usd(s.volume, 0)} volume`);
+  store.subscribe(({ snapshot }) => {
+    if (!snapshot) return;
+    const a = snapshot.strategyA;
+    const tvl = units(a.tvl, 6);
+    const idleShare = tvl > 0 ? (units(a.idle, 6) / tvl) * 100 : 0;
+    const target = a.reserveBps / 100;
+    const growth = (units(a.sharePrice, 6) - 1) * 100;
+    set('tvl', usd(tvl), `${num(units(a.totalSupply, 12), 0)} ysUSDC outstanding`);
+    set('price', num(units(a.sharePrice, 6), 6), `USDC per ysUSDC · ${growth >= 0 ? '+' : ''}${pct(growth, 3)} since launch`);
+    set('fees', usd(units(a.jitFees, 6)), `${num(a.jitFills, 0)} JIT fills since launch · ${a.flashFeeBps} bps fee`);
+    set(
+      'reserve',
+      pct(idleShare, 1),
+      `Target ${pct(target, 0)} · ${usd(units(a.idle, 6), 0)} idle`,
+      Math.abs(idleShare - target) > 5 ? 'warn' : '',
+    );
   });
 }
 
 export function mountMmStats(root: HTMLElement): void {
   const set = tiles(root, [
     { key: 'tvl', label: 'Total value locked' },
-    { key: 'apy', label: 'Net APY' },
     { key: 'price', label: 'ETH oracle price' },
-    { key: 'fills', label: 'Intents filled' },
+    { key: 'income', label: 'Spread income' },
+    { key: 'apy', label: 'Lending APY on idle' },
   ]);
-  mmStore.subscribe((s) => {
-    const total = tvl(s);
-    const usdcShare = total > 0 ? (s.profiles.reduce((a, p) => a + p.usdc, 0) / total) * 100 : 0;
-    const a = apys(s);
-    // Change vs ~1 minute ago (30 ticks of 2s).
-    const ref = s.history[Math.max(0, s.history.length - 31)];
-    const change = ref > 0 ? (s.price / ref - 1) * 100 : 0;
-    set('tvl', usd(total), `3 profiles · ${pct(usdcShare, 0)} USDC`);
-    set('apy', pct(a.net), `Lending ${pct(a.lending)} + spread ${pct(a.spread)}`);
-    set('price', usd(s.price), `${change >= 0 ? '▲' : '▼'} ${pct(Math.abs(change))} · 1m`, change >= 0 ? 'pos' : 'neg');
-    set('fills', num(s.fillCount, 0), `${usd(s.volume, 0)} volume · ${s.rejectedCount} rejected`);
+  store.subscribe(({ snapshot }) => {
+    if (!snapshot) return;
+    const b = snapshot.strategyB;
+    const tvl = b.vaults.reduce((s, v) => s + units(v.value, 6), 0);
+    const stable = b.vaults.reduce((s, v) => s + units(v.stable, 6), 0);
+    const income = b.vaults.reduce((s, v) => s + units(v.spreadIncome, 6), 0);
+    const swaps = b.vaults.reduce((s, v) => s + v.swaps, 0);
+    const apy = (v: number | null) => (v === null ? 'measuring…' : pct(v));
+    set('tvl', usd(tvl), `${b.vaults.length} profiles · ${pct(tvl > 0 ? (stable / tvl) * 100 : 0, 0)} USDC`);
+    const age = Date.now() - snapshot.oracle.updatedAt * 1000;
+    set('price', usd(snapshot.oracle.price), `Updated ${ago(age)} · ±${b.spreadBps} bps spread`, age > 10 * 60_000 ? 'warn' : '');
+    set('income', usd(income), `${num(swaps, 0)} swaps filled from inventory`);
+    set('apy', b.lendingApy.usdc === null ? 'Measuring…' : pct(b.lendingApy.usdc), `USDC ${apy(b.lendingApy.usdc)} · WETH ${apy(b.lendingApy.weth)}`);
   });
 }
